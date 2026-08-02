@@ -1,5 +1,5 @@
 {
-  "name": "Node devcontainer",
+  "name": "Ledger API devcontainer",
   "image": "jslog/ledger-api:latest",
   "remoteUser": "node",
   "appPort": [3000],
