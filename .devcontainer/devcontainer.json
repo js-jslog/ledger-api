@@ -1,0 +1,38 @@
+{
+  "name": "Node devcontainer",
+  "image": "jslog/devcontainer-node-base:latest",
+  "remoteUser": "node",
+  "appPort": [3000],
+  /* The `mount` property allows for a more readable syntax (using object notation),
+    however, you then end up with a workspace mount being created in addition. This
+    pair of properties ensures that the "workspace" is set to the /app directory as
+    we would want, and that it is a volume, rather than a mount */
+  "workspaceMount": "source=devcontainer-node-base,target=/app,type=volume",
+  "workspaceFolder": "/app",
+  /* Docker-in-Docker. To allow local testing of prod-like builds. We will
+     consider removing this if we are enough control and insight in to the
+     devops platform.
+     If we decide to keep it then we should consider changing from "latest" to a
+     specific version to match devops */
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true,
+      "dockerDashComposeVersion": "v2",
+      "installDockerBuildx": true
+    }
+  },
+  /* Allow the Docker init script from the DinD feature to run. If we remove
+     DinD, this should also be removed, and then so should the CMD in the
+     Dockerfile.devcontainer */
+  "overrideCommand": false,
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "dev.containers.forwardWSLServices": false,
+        "dev.containers.dockerCredentialHelper": false,
+        "dev.containers.gitCredentialHelperConfigLocation": "none"
+      }
+    }
+  }
+}
