@@ -1,13 +1,13 @@
 {
   "name": "Node devcontainer",
-  "image": "jslog/devcontainer-node-base:latest",
+  "image": "jslog/ledger-api:latest",
   "remoteUser": "node",
   "appPort": [3000],
   /* The `mount` property allows for a more readable syntax (using object notation),
     however, you then end up with a workspace mount being created in addition. This
     pair of properties ensures that the "workspace" is set to the /app directory as
     we would want, and that it is a volume, rather than a mount */
-  "workspaceMount": "source=devcontainer-node-base,target=/app,type=volume",
+  "workspaceMount": "source=ledger-api,target=/app,type=volume",
   "workspaceFolder": "/app",
   /* Docker-in-Docker. To allow local testing of prod-like builds. We will
      consider removing this if we are enough control and insight in to the
