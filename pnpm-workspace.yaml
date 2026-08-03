@@ -1,0 +1,19 @@
+# pnpm 11 gates dependency build scripts behind an explicit allowlist.
+#
+# Three traps here, all of which land inside the brief's 90-minute step-0 stop line:
+#
+#   1. The setting lives in THIS file. The widely-documented
+#      `package.json` -> `"pnpm": { "onlyBuiltDependencies": [...] }` form is no
+#      longer read at all ("The 'pnpm' field in package.json is no longer read
+#      by pnpm"), and it fails silently unless you run `pnpm config list`.
+#   2. pnpm 11 renamed the key. `onlyBuiltDependencies` (pnpm 9/10, and every
+#      tutorial and model completion) is superseded by the `allowBuilds` map.
+#   3. An unapproved build script does not warn — it makes EVERY `pnpm <script>`
+#      invocation fail, including `pnpm tsc --version`, because the pre-script
+#      dependency-status check shells out to `pnpm install` and inherits its
+#      non-zero exit. The toolchain looks completely broken.
+#
+# esbuild is here because vitest -> vite -> esbuild needs its postinstall to
+# place the platform binary.
+allowBuilds:
+  esbuild: true

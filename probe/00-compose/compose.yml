@@ -1,0 +1,17 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: probe
+      POSTGRES_DB: ledger
+    ports:
+      - "55432:5432"
+    volumes:
+      # The wrinkle the brief flags: a bind mount whose source lives on the
+      # named-volume workspace, resolved by the INNER (DinD) daemon.
+      - ./initdb.sql:/docker-entrypoint-initdb.d/initdb.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ledger"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
