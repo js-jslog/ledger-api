@@ -4,8 +4,10 @@
 // keys rejected". The cheap path is to lift `components.schemas` out of the supplied
 // spec. This probe establishes what that costs.
 import { describe, expect, it } from 'vitest'
-import Ajv from 'ajv'
-import addFormats from 'ajv-formats'
+import { Ajv } from 'ajv'
+import addFormatsModule from 'ajv-formats'
+
+const addFormats = addFormatsModule as unknown as (a: Ajv) => Ajv
 
 const strictAjv = () => addFormats(new Ajv({ strict: true }))
 

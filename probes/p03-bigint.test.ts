@@ -66,14 +66,15 @@ describe('BIGINT round-trip through node-postgres', () => {
     expect(pence / 100).toBe(10.99)
 
     // But a sufficient-funds check in application code does not:
+    // A sufficient-funds check also coerces, so it happens to pass:
     const withdrawalPence = 500
-    expect(pence >= withdrawalPence).toBe(true) // '1099' >= 500 -> coerced, fine
-    // ...until the numbers differ in string-vs-numeric ordering:
-    expect('900' >= 1000).toBe(false) // ok, coerces
-    // The real bite is addition, which concatenates:
+    expect(pence >= withdrawalPence).toBe(true)
+
+    // The bite is addition, which concatenates instead of adding. The column is
+    // typed `number`, so the compiler raises nothing at all.
     const newBalance = pence + 500
-    expect(newBalance as unknown).toBe('1099500') // <-- £10,995.00 becomes £10,995.00... no: £10995.00
     expect(typeof newBalance).toBe('string')
+    expect(newBalance as unknown).toBe('1099500') // 10,995.00 pounds, not 15.99
   })
 })
 

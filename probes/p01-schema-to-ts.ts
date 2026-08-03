@@ -32,7 +32,8 @@ type CreateUserRequest = FromSchema<typeof createUserRequest>
 
 // If inference works, `name` is `string` and this assignment is an error.
 const check: CreateUserRequest = {
-  name: 123, // EXPECT: type error
+  // @ts-expect-error PROBE ASSERTION: inference works, so number is rejected here.
+  name: 123,
   address: { line1: 'a', town: 't', county: 'c', postcode: 'p' },
   phoneNumber: '+447700900000',
   email: 'a@b.com',
@@ -42,5 +43,5 @@ const check: CreateUserRequest = {
 const line2: string | undefined = check.address.line2
 void line2
 
-// EXPECT: error — `nope` is not a property of the inferred type
+// @ts-expect-error PROBE ASSERTION: `nope` is absent from the inferred type.
 void check.nope
