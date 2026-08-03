@@ -25,6 +25,12 @@ during the real 12-hour build or the pair-coding session?**
 | F14 | §4 accepts bcryptjs's "chunked on-thread hashing"; it barely chunks | Moderate |
 | F15 | Two design moves make §3 invariants structural rather than checklist items | Opportunity |
 
+**Suite time**, which §14 lists as unmeasured: **101 tests across 14 files in ~6s
+wall clock**, including full Postgres integration and 20 end-to-end HTTP tests.
+Roughly a third of that is bcrypt (F14). Serialised execution (F4) is not the
+bottleneck at this size, so §4's isolation strategy costs nothing worth
+optimising.
+
 Confirmed as stated, no correction needed: all five §8 Express 5 acceptance
 criteria; the `never`-based exhaustiveness check; and §14's "async middleware
 error propagation" unknown, which resolves in the brief's favour.

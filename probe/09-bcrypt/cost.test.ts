@@ -59,7 +59,8 @@ describe('what the accepted cost actually is', () => {
     expect(hashing.ticks).toBeLessThan(baseline.ticks / 3)
   })
 
-  test('the SYNCHRONOUS API is the trap, and it is one letter away', async () => {
+  // Not an async test: there is nothing to await, which is the whole point.
+  test('the SYNCHRONOUS API is the trap, and it is one letter away', () => {
     // bcrypt.hashSync is the same call with four more characters, appears in most
     // examples, and blocks the process for the full duration. In a single-process
     // Node service that is a hard cap on concurrent logins.
