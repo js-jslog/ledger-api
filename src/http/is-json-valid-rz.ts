@@ -98,6 +98,23 @@ export function egressCheck(schema: object): (body: unknown) => Result<void, Dom
   }
 }
 
+/**
+ * Shape without content: the body's top-level key names and nothing else.
+ *
+ * This is what replaces logging the payload. It answers the question the payload was
+ * actually being consulted for — was the field misspelled, or absent, or is the
+ * client sending something unexpected — without carrying any values.
+ *
+ * It adds no new exposure class: unknown key *names* already reach the client in
+ * `details[].field`, because that is where `additionalProperties` reports them.
+ */
+function shapeOf(body: unknown): readonly string[] | undefined {
+  // express.json() in strict mode yields objects and arrays; guard anyway, because
+  // this function is also reachable from the JWT payload path.
+  if (typeof body !== 'object' || body === null) return undefined
+  return Object.keys(body)
+}
+
 /** Ajv's instancePath is a JSON Pointer; the spec's `details[].field` is a name. */
 function toFieldError(e: ErrorObject): FieldError {
   const pointer = e.instancePath.replace(/^\//, '').replaceAll('/', '.')
@@ -160,10 +177,20 @@ export function isJsonValidRz<S extends object>(
     const errors = compiled.errors ?? []
     return err(
       validationFailed(errors.map(toFieldError), {
-        // The full payload goes to the log, keyed by correlation id. What protects
-        // it is the response boundary, not redaction: renderError sends only the
-        // spec's {field, message, type} details, never this and never schemaPath.
-        payload: body,
+        // NO `payload`. The request body is never logged, and `PayloadForbidden`
+        // makes putting it back a compile error.
+        //
+        // It was logged, on the reasoning that the response boundary was the
+        // protection. That is the wrong defence: it protects the client and says
+        // nothing about who reads the logs. Because `password` is `minLength: 12`
+        // on the signup schema, every failed signup or failed login validation was
+        // writing a real credential to the sink as JSON.
+        //
+        // Nothing diagnostic is lost. `details` already names every offending field
+        // and keyword, and `schemaPaths` gives the schema structure. The payload's
+        // only additional contribution was the values -- which are the sensitive
+        // part and the least useful part for debugging a schema mismatch.
+        payloadKeys: shapeOf(body),
         // schemaPath is the more useful of Ajv's two paths for debugging, and the
         // one that must not be rendered -- it exposes schema structure.
         schemaPaths: errors.map((e) => e.schemaPath),

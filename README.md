@@ -9,7 +9,10 @@ The output is [`FINDINGS.md`](./FINDINGS.md) — eighteen findings, each stating
 the brief claims, what actually happens, and what the brief should say instead.
 F1–F15 are the original probe; F16–F18 record follow-up work that closed three
 things the first pass left open, and **F7 carries an amendment** because that
-follow-up proved its conclusion too strong.
+follow-up proved its conclusion too strong. **F19 is a correction to my own work** —
+the log-payload trust policy in F17 was wrong and was writing plaintext passwords to
+the log sink. Both amendments are made in place rather than by deletion, because the
+reasoning that produced the wrong answers is the useful part.
 
 ## What to read, in what order
 
@@ -25,7 +28,7 @@ follow-up proved its conclusion too strong.
 | | |
 |---|---|
 | Confirmed as the brief states | All five §8 Express 5 criteria; every §7 concurrency figure; every §4 money claim; the `kysely/migration` subpath; nested `additionalProperties`; §6 P7 |
-| §14 unknowns resolved **favourably** | Async middleware error propagation; the four-library seam at runtime; suite time (**~6s**, 127 tests, full DB integration) |
+| §14 unknowns resolved **favourably** | Async middleware error propagation; the four-library seam at runtime; suite time (**~6s**, 132 tests, full DB integration) |
 | §14 unknowns resolved **unfavourably** | The devcontainer/compose risk is described backwards (F3); the four-library seam does not typecheck in its *natural* shape (F7, amended — a working inferring shape does exist) |
 | Step-0 blockers the brief does not mention | pnpm 11's build-script gate (F1); TypeScript 7 vs typescript-eslint (F2) |
 | Claims that are wrong | §7's justification for the 422 (F10) |
@@ -46,7 +49,7 @@ Requires Docker and pnpm. From the repository root:
 pnpm install                 # read pnpm-workspace.yaml before changing it
 docker compose up -d --wait  # Postgres on localhost:55432, healthy in ~3s
 docker compose exec -T db psql -U ledger -d ledger -c 'CREATE DATABASE ledger_probe'
-pnpm vitest run              # 127 tests, ~6s
+pnpm vitest run              # 132 tests, ~6s
 pnpm typecheck && pnpm lint  # both clean
 ```
 

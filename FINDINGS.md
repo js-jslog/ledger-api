@@ -27,8 +27,9 @@ during the real 12-hour build or the pair-coding session?**
 | F16 | The validation funnel left the asserted type and the schema unbound — now closed | **Closed by the follow-up work** |
 | F17 | Correlation ids and log-at-construction, and the three guards the intersection added | Addition |
 | F18 | Nothing checked what the service sends back; egress validation catches a hash leak | **High — closes a §3 invariant** |
+| F19 | F17's trust policy was wrong: the ingress payload was logging plaintext passwords | **Corrected — my error, not the brief's** |
 
-**Suite time**, which §14 lists as unmeasured: **127 tests across 16 files in ~6s
+**Suite time**, which §14 lists as unmeasured: **132 tests across 16 files in ~6s
 wall clock**, including full Postgres integration and 20 end-to-end HTTP tests.
 Roughly a third of that is bcrypt (F14). Serialised execution (F4) is not the
 bottleneck at this size, so §4's isolation strategy costs nothing worth
@@ -888,14 +889,13 @@ error can exist unlogged. Secondary cost: the constructors are no longer pure, s
 the log sink defaults to silent under test and a test that cares installs a
 capturing one.
 
-**The trust-policy departure, stated plainly because it looks like an omission.**
-There is no redaction. The full payload goes into the log record, keyed by
-correlation id — a submitted password included. What protects it is the **response
-boundary**, not obfuscation, and that boundary is enforced structurally: log-only
-data (`payload`, `schemaPaths`, `stack`) is a separate constructor parameter rather
-than fields on `DomainError`, so the renderer cannot render what it cannot see.
-Verified: `hunter2` appears in the log record and nowhere in the response, and every
-rendered `details` entry has exactly `{field, message, type}`.
+**The trust-policy departure — ~~stated plainly because it looks like an
+omission~~ WRONG, see F19.** This paragraph originally defended logging the full
+request payload on the grounds that "what protects it is the **response boundary**,
+not obfuscation". The structural half of that is true and still stands: log-only data
+is a separate constructor parameter rather than fields on `DomainError`, so the
+renderer cannot render what it cannot see. The conclusion drawn from it was wrong,
+and it was writing plaintext passwords to the log sink. Corrected in F19.
 
 **One knock-on worth flagging.** Adding `correlationId` to the envelope breaks
 byte-equality of responses, which broke the "bad credentials are indistinguishable"
@@ -959,3 +959,82 @@ function values. Worth one line so nobody spends time on it, and worth rememberi
 only when the funnel is pointed at an internally constructed object — which is
 exactly what egress validation does. Verified harmless there too: `JSON.stringify`
 drops symbol keys, so they cannot reach the client either.
+
+## F19 — F17's trust policy was wrong, and it was logging plaintext passwords
+
+**This is a correction to my own work, not a finding about the brief.** It is here
+rather than quietly fixed in a commit because the failure was in the *reasoning*, and
+reasoning that produced a confident wrong answer is worth keeping visible.
+
+**What was wrong.** The ingress branch of `isJsonValidRz` passed `payload: body` into
+`validationFailed`, and `build()` spread it into the emitted record. Because the
+signup schema sets `password` to `minLength: 12`, the values written were real
+credentials rather than placeholders: **every failed signup and every failed login
+validation wrote the supplied password to the log sink as JSON.** Probe 10 contained
+a *passing test asserting exactly that*, which is a considerably worse artefact than
+an untested oversight.
+
+**Why the defence was wrong, precisely.** F17 said "what protects it is the response
+boundary, not redaction." The response boundary protects **the client**. It says
+nothing about who reads the logs — and a log store is where credentials go on to have
+a long, widely-replicated and badly-governed life. Every large plaintext-password
+incident of the last decade (Facebook, Twitter, GitHub) was this shape, not a database
+breach. Having reasoned about the threat and reached the wrong conclusion is worse
+than not having considered it, because it means the mistake was load-bearing.
+
+**The fix is a deletion.** The payload is not logged. Nothing diagnostic is lost:
+`details` already names every offending field and keyword, and `schemaPaths` gives the
+schema structure. The payload's only additional contribution was the *values*, which
+are simultaneously the sensitive part and the least useful part for debugging a schema
+mismatch. `payloadKeys` — `Object.keys(body)`, shape without content — replaces it,
+and answers the question the payload was actually consulted for: was the field
+misspelled, absent, or unexpected. That adds no new exposure class, because unknown
+key names already reach the client in `details[].field`.
+
+**Not a denylist.** A denylist on key names fails open, and the next
+credential-bearing field will not be called `password`.
+
+**The asymmetry is the interesting part, and it is now enforced by the type system.**
+The same funnel keeps the payload on the *egress* call and loses it on the *ingress*
+call:
+
+- **ingress** → `validationFailed` → payload forbidden. The body is client-supplied
+  and may be anything.
+- **egress** → `unexpected` → payload permitted. That body is the service's own
+  output, response schemas exclude `password_hash` (F18), and when a response fails
+  its published schema the payload is the entire diagnostic.
+
+A deletion is only as durable as the next person's memory, and `LogOnly`'s index
+signature would have accepted a re-added `payload` in silence. So the six
+client-reachable constructors take `PayloadForbidden = LogOnly & { payload?: never }`
+and `unexpected` keeps `LogOnly`. Re-adding the payload to an ingress call is now a
+compile error; the escape hatch for egress still compiles. Verified both directions.
+
+**One adjacent assumption, checked because it is the same leak class one layer over.**
+`details[].message` comes from Ajv and goes to **both** the log and the client, so if
+Ajv ever embedded the offending value in a message, the deletion above would not be
+enough. It does not — verified across every keyword this API uses:
+
+```
+required             must have required property 'missing'      params: {missingProperty}
+additionalProperties must NOT have additional properties        params: {additionalProperty}
+minLength            must NOT have fewer than 12 characters     params: {limit}
+format               must match format "email"                  params: {format}
+minimum              must be >= 1000                            params: {comparison, limit}
+enum                 must be equal to one of the allowed values  params: {allowedValues}
+```
+
+Property names and schema constraints, never values. `toFieldError` takes only
+`message`, `keyword` and the field name — not `params` — so even `allowedValues` does
+not reach the client.
+
+**Now asserted, at three widths**, because a single narrowly-aimed assertion is what
+let the original problem look tested:
+
+1. Per-path: a real credential appears in neither the response nor any log record, for
+   failed login validation and failed signup.
+2. Whole-session sweep: signup, a wrong-password 401, a successful login and an
+   authenticated request — then search the entire sink for the credential, the
+   attempted wrong credential, and `$2b$` (the bcrypt hash, which would be
+   offline-crackable).
+3. Compile-time: re-adding `payload` to an ingress constructor does not typecheck.

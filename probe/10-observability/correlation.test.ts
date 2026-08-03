@@ -140,15 +140,16 @@ describe('the two logging sites do not duplicate each other', () => {
     const construction = logs.find((r) => r.event === 'domain_error')
     const outcome = logs.find((r) => r.event === 'request_failed')
 
-    // Detail lives on the construction record.
+    // Detail lives on the construction record -- field names, keywords and schema
+    // structure. Not values: see the payload block below.
     expect(construction).toMatchObject({ kind: 'ValidationFailed' })
-    expect(construction?.payload).toMatchObject({ email: 'not-an-email' })
+    expect(construction?.payloadKeys).toContain('email')
     expect(construction?.schemaPaths).toBeDefined()
 
     // The outcome record has the routing facts and none of the detail. Without
     // this split every failure produces two copies of the same information.
     expect(outcome).toMatchObject({ status: 400, method: 'POST', route: '/v1/users' })
-    expect(outcome).not.toHaveProperty('payload')
+    expect(outcome).not.toHaveProperty('payloadKeys')
     expect(outcome).not.toHaveProperty('schemaPaths')
   })
 
@@ -158,22 +159,122 @@ describe('the two logging sites do not duplicate each other', () => {
   })
 })
 
-describe('the response boundary is the protection, not redaction', () => {
-  test('the full payload is logged and none of it is rendered', async () => {
+describe('the request payload never reaches the log', () => {
+  /**
+   * This block previously asserted the opposite. It contained a passing test whose
+   * expectation was that a plaintext password appears in a log record, defended by
+   * "the response boundary is the protection, not redaction".
+   *
+   * That defence protects the client and says nothing about who reads the logs, which
+   * is where credentials go on to have a long and badly-governed life. Since the
+   * signup schema sets `password` to `minLength: 12`, the values being written were
+   * real credentials rather than placeholders. The payload is now not logged at all.
+   */
+  test('a submitted password appears NOWHERE -- not in the response, not in any record', async () => {
+    const SECRET = 'correct-horse-battery-staple'
     const res = await request(app)
       .post('/v1/auth/login')
-      .send({ email: 'someone@example.com', password: 'hunter2', extra: 'unexpected' })
+      .send({ email: 'someone@example.com', password: SECRET, extra: 'unexpected' })
       .expect(400)
 
-    // Logged in full, including the password, keyed by correlation id.
-    const construction = logs.find((r) => r.event === 'domain_error')
-    expect(construction?.payload).toMatchObject({ password: 'hunter2' })
+    // The whole sink, not just the field the old test happened to look at.
+    expect(JSON.stringify(logs)).not.toContain(SECRET)
+    expect(JSON.stringify(res.body)).not.toContain(SECRET)
+  })
 
-    // Not rendered. The client gets the spec's {field,message,type} and nothing else.
+  test('a failed signup does not log the password either', async () => {
+    const SECRET = 'another-real-looking-secret'
+    // Fails on the phone number, so the password itself is valid and present.
+    await request(app)
+      .post('/v1/users')
+      .send({ ...VALID_USER, password: SECRET, phoneNumber: 'not-a-phone-number' })
+      .expect(400)
+    expect(JSON.stringify(logs)).not.toContain(SECRET)
+  })
+
+  test('shape without content: key names are logged, values are not', async () => {
+    await request(app)
+      .post('/v1/auth/login')
+      .send({ email: 'not-an-email', password: 'a-real-secret-value' })
+      .expect(400)
+
+    const construction = logs.find((r) => r.event === 'domain_error')
+    // Enough to answer "was the field misspelled, absent, or unexpected?".
+    expect(construction?.payloadKeys).toEqual(['email', 'password'])
+    // And no payload at all. `PayloadForbidden` makes re-adding it a compile error;
+    // this is the runtime half of the same claim.
+    expect(construction).not.toHaveProperty('payload')
+  })
+
+  test('the diagnostic value that remains is the part that was actually useful', async () => {
+    await request(app)
+      .post('/v1/users')
+      .send({ ...VALID_USER, email: 'not-an-email' })
+      .expect(400)
+
+    const construction = logs.find((r) => r.event === 'domain_error')
+    // details names the offending field and keyword; schemaPaths gives the structure.
+    // Between them the payload's values add nothing to a schema-mismatch diagnosis.
+    expect(construction?.details).toEqual([
+      expect.objectContaining({ field: 'email', type: 'format' }),
+    ])
+    expect(construction?.schemaPaths).toEqual(['#/properties/email/format'])
+  })
+
+  test('SWEEP: a real credential survives a whole session without reaching the sink', async () => {
+    // Broader than the per-path tests: exercise signup, a wrong-password 401, a
+    // successful login and an authenticated request, then search the entire sink.
+    // The 401 path matters most -- it goes through `unauthenticated`, which is handed
+    // the attempted credentials by definition.
+    const SECRET = 'thoroughbred-pelican-9271'
+    await request(app)
+      .post('/v1/users')
+      .send({ ...VALID_USER, password: SECRET })
+      .expect(201)
+    await request(app)
+      .post('/v1/auth/login')
+      .send({ email: VALID_USER.email, password: 'the-wrong-one-entirely' })
+      .expect(401)
+    const login = await request(app)
+      .post('/v1/auth/login')
+      .send({ email: VALID_USER.email, password: SECRET })
+      .expect(200)
+    await request(app)
+      .get('/v1/accounts')
+      .set('authorization', `Bearer ${login.body.token}`)
+      .expect(200)
+
+    const sink = JSON.stringify(logs)
+    expect(sink).not.toContain(SECRET)
+    expect(sink).not.toContain('the-wrong-one-entirely')
+    // Nor does the bcrypt hash leak, which would be offline-crackable.
+    expect(sink).not.toContain('$2b$')
+  })
+
+  test("Ajv's own messages do not smuggle the value through details", async () => {
+    // details goes to BOTH the log and the client, so this is the same leak class one
+    // layer over. Verified across the keywords this API uses: Ajv's messages carry
+    // property names and schema constraints, never the offending value.
+    const SECRET = 'sk-live-SECRETVALUE'
+    const res = await request(app)
+      .post('/v1/auth/login')
+      .send({ email: SECRET, password: SECRET })
+      .expect(400)
+
+    expect(JSON.stringify(res.body.details)).not.toContain(SECRET)
+    expect(JSON.stringify(logs)).not.toContain(SECRET)
+  })
+
+  test('the client still gets only the spec-defined detail fields', async () => {
+    const res = await request(app)
+      .post('/v1/auth/login')
+      .send({ email: 'not-an-email', password: 'x'.repeat(20) })
+      .expect(400)
+
     const rendered = JSON.stringify(res.body)
-    expect(rendered).not.toContain('hunter2')
     expect(rendered).not.toContain('schemaPath')
     expect(rendered).not.toContain('#/')
+    expect(rendered).not.toContain('payloadKeys')
     for (const detail of res.body.details as Record<string, unknown>[]) {
       expect(Object.keys(detail).sort()).toEqual(['field', 'message', 'type'])
     }

@@ -84,21 +84,44 @@ const LEVELS: Record<DomainErrorKind['kind'], LogLevel> = {
 }
 
 /**
- * Data that goes to the log and must never reach the client.
+ * Data that goes to the log and not to the client.
  *
  * Keeping it in a separate parameter — rather than as fields on `DomainError` — is
- * what enforces that. The renderer only ever sees a `DomainError`, so there is no
- * payload and no `schemaPath` available to it even by accident. The response
- * boundary is the protection, not obfuscation of the record.
+ * what keeps the renderer from being able to render it: the renderer only ever sees
+ * a `DomainError`, so there is no `schemaPath` available to it even by accident.
+ *
+ * BUT THE RESPONSE BOUNDARY IS NOT A SUFFICIENT DEFENCE, and an earlier version of
+ * this module claimed it was. "The response boundary is the protection, not
+ * redaction" protects the *client*. It says nothing about who reads the logs, and a
+ * log store is exactly where credentials go on to have a long, widely-replicated and
+ * badly-governed life. Every large plaintext-password incident of the last decade was
+ * this, not a database breach. So the request payload is not logged at all — see
+ * `PayloadForbidden` below.
  */
 export type LogOnly = {
-  /** The offending request or response body, in full. */
-  readonly payload?: unknown
   /** Ajv's schemaPath — more useful than instancePath for debugging, never rendered. */
   readonly schemaPaths?: readonly string[]
   /** Anything else worth stitching by correlation id. */
   readonly [field: string]: unknown
 }
+
+/**
+ * `LogOnly` with `payload` made a **type error**, for every constructor that can be
+ * reached with client-supplied input.
+ *
+ * The fix for logging credentials is a deletion, not a redaction mechanism — a
+ * denylist on key names fails open, and the next credential-bearing field will not be
+ * called `password`. But a deletion alone is only as durable as the next person's
+ * memory, and `LogOnly`'s index signature would accept a re-added `payload` in
+ * silence. `payload?: never` makes putting it back a compile error.
+ *
+ * The asymmetry is the point, and it is enforced by which constructor a call site
+ * uses:
+ *   - ingress failures go through `validationFailed` → payload forbidden;
+ *   - egress failures go through `unexpected` → payload permitted, because that body
+ *     is the service's own output rather than anything a client sent.
+ */
+export type PayloadForbidden = LogOnly & { readonly payload?: never }
 
 /** The one place an error is born, logged and stamped with its correlation id. */
 function build<E extends DomainErrorKind>(kind: E, logOnly: LogOnly = {}): E & { correlationId: string } {
@@ -115,21 +138,21 @@ function build<E extends DomainErrorKind>(kind: E, logOnly: LogOnly = {}): E & {
 
 export const validationFailed = (
   details: readonly FieldError[],
-  logOnly?: LogOnly,
+  logOnly?: PayloadForbidden,
 ): DomainError => build({ kind: 'ValidationFailed', details }, logOnly)
 
-export const unauthenticated = (detail: string, logOnly?: LogOnly): DomainError =>
+export const unauthenticated = (detail: string, logOnly?: PayloadForbidden): DomainError =>
   build({ kind: 'Unauthenticated', detail }, logOnly)
 
-export const forbidden = (logOnly?: LogOnly): DomainError => build({ kind: 'Forbidden' }, logOnly)
+export const forbidden = (logOnly?: PayloadForbidden): DomainError => build({ kind: 'Forbidden' }, logOnly)
 
-export const notFound = (resource: string, logOnly?: LogOnly): DomainError =>
+export const notFound = (resource: string, logOnly?: PayloadForbidden): DomainError =>
   build({ kind: 'NotFound', resource }, logOnly)
 
-export const alreadyExists = (resource: string, logOnly?: LogOnly): DomainError =>
+export const alreadyExists = (resource: string, logOnly?: PayloadForbidden): DomainError =>
   build({ kind: 'AlreadyExists', resource }, logOnly)
 
-export const insufficientFunds = (logOnly?: LogOnly): DomainError =>
+export const insufficientFunds = (logOnly?: PayloadForbidden): DomainError =>
   build({ kind: 'InsufficientFunds' }, logOnly)
 
 export const unexpected = (cause: unknown, logOnly?: LogOnly): DomainError =>
