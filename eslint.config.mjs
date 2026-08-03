@@ -26,10 +26,16 @@ export default tseslint.config(
     },
   },
   {
-    // Probes deliberately poke at `any` and at knowingly-wrong types.
+    // Probes deliberately poke at `any` and at knowingly-wrong types, and
+    // supertest types `res.body` as `any`, so asserting on a response body is
+    // unavoidably "unsafe" by these rules. Narrowed to the probe tree so the
+    // src/ tree keeps the full strictness.
     files: ['probe/**'],
     rules: {
       '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
       '@typescript-eslint/no-unnecessary-type-assertion': 'off',
     },
   },

@@ -28,6 +28,33 @@ export const ajv = new Ajv({
 })
 addFormats(ajv)
 
+/**
+ * `currencyScale: 2` -- "at most two decimal places".
+ *
+ * This has to live here, beside the Ajv instance, and it has to run before any
+ * module-level schema constant is compiled. Registering it in a test file instead
+ * (which is where it started) makes the production path throw at startup:
+ *
+ *     Error: strict mode: unknown keyword: "currencyScale"
+ *
+ * That is the good failure -- `strict: true` refuses to compile a schema with a
+ * keyword it does not know, rather than ignoring it and silently accepting 3dp
+ * amounts. But it is a real ordering dependency in the composition root.
+ *
+ * See FINDINGS.md F6 for why the arithmetic is `round-then-check-slack` and not
+ * `multipleOf: 0.01` (which rejects 15.7% of legal amounts) or
+ * `Number.isInteger(x * 100)` (13.1%).
+ */
+ajv.addKeyword({
+  keyword: 'currencyScale',
+  type: 'number',
+  schemaType: 'number',
+  validate: (scale: number, data: number) => {
+    const factor = 10 ** scale
+    return Math.abs(data * factor - Math.round(data * factor)) <= 1e-6
+  },
+})
+
 /** Ajv's instancePath is a JSON Pointer; the spec's `details[].field` is a name. */
 function toFieldError(e: ErrorObject): FieldError {
   const pointer = e.instancePath.replace(/^\//, '').replaceAll('/', '.')

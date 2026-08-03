@@ -7,17 +7,10 @@ import { describe, expect, test } from 'vitest'
 import { ajv, validator } from '../../src/http/validate.js'
 import { createUserSchema, type CreateUserBody } from '../../src/http/schemas.js'
 
-// The custom keyword the schemas rely on. Registered here rather than in
-// src/http/validate.ts so the probe shows what happens without it, below.
-ajv.addKeyword({
-  keyword: 'currencyScale',
-  type: 'number',
-  schemaType: 'number',
-  validate: (scale: number, data: number) => {
-    const factor = 10 ** scale
-    return Math.abs(data * factor - Math.round(data * factor)) <= 1e-6
-  },
-})
+// `currencyScale` is registered in src/http/validate.ts, beside the Ajv instance.
+// It started out registered here, in the test file -- which made the production
+// path throw `strict mode: unknown keyword: "currencyScale"` at startup. Left as
+// a note because that ordering dependency is the finding, not an aside.
 
 const validUser = {
   name: 'Test User',
