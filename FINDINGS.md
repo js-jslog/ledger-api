@@ -21,6 +21,9 @@ during the real 12-hour build or the pair-coding session?**
 | F10 | §7's justification for the 422 is wrong; a zero-row update can mean 404 | **High — walkthrough risk** |
 | F11 | Account-number minting is a forced build item with no decision recorded | **Gap — forced build item** |
 | F12 | Nobody is assigned to maintain the timestamps the spec requires | Moderate |
+| F13 | §6's "note, don't build" pile is not costless — the API can violate its own published schema | **High — reviewer-visible** |
+| F14 | §4 accepts bcryptjs's "chunked on-thread hashing"; it barely chunks | Moderate |
+| F15 | Two design moves make §3 invariants structural rather than checklist items | Opportunity |
 
 Confirmed as stated, no correction needed: all five §8 Express 5 acceptance
 criteria; the `never`-based exhaustiveness check; and §14's "async middleware
@@ -608,3 +611,151 @@ omission. There is nothing for an UPDATE to plausibly maintain.
 
 **Brief should say:** one line in §3's invariant list, and one row in §4. It is a
 five-minute decision that is very hard to retrofit once several write paths exist.
+
+## F13 — §6's "note, don't build" pile is not costless
+
+**Brief, §6:** "**Note, don't build:** the £10,000 balance ceiling with no defined
+breach status; `minimum: 0.00` permitting a £0 transaction; the seven
+copy-pasted 403 descriptions."
+
+Filing these as observations is a reasonable scoping call. What the brief does not
+say is that the first two mean **the service emits responses that fail the
+specification it was built against**, which is a different kind of item from a
+copy-pasted description.
+
+Verified by compiling the *supplied* response schemas — transcribed verbatim, with
+only §6's forced `format:`→`pattern:` rewrite applied so Ajv will load them at all
+— and validating real responses against them.
+
+**The balance ceiling.** `BankAccountResponse.balance` declares
+`maximum: 10000.00`. `CreateTransactionRequest.amount` declares `maximum: 10000`.
+So each individual deposit of £10,000 is legal by the request schema, and two of
+them are not representable by the response schema:
+
+```
+POST .../transactions {amount: 10000, type: deposit}  -> 201
+POST .../transactions {amount: 10000, type: deposit}  -> 201
+GET  /v1/accounts/{n}                                 -> 200, balance: 20000
+   -> fails BankAccountResponse: keyword "maximum" at /balance
+```
+
+Nothing in that sequence is a misuse of the API. Every available behaviour breaks
+something: honour the ceiling and you must invent a status code the spec does not
+define; ignore it and you serve a body that fails your own published schema.
+
+**The transaction id pattern.** §6 corrective item 4 catches
+`^tan-[A-Za-z0-9]$` as a path-parameter defect — "as a path-parameter validator it
+400s every real request". It is *also* on `TransactionResponse.id`, which makes
+response conformance **unachievable**: the pattern admits exactly one character
+after the prefix, so there is no id that both satisfies it and is unique across
+more than 62 transactions. Verified — it rejects the spec's own `tan-123abc`
+example and accepts only `tan-a`-shaped ids.
+
+**The £0 transaction.** This service returns 400, using
+`exclusiveMinimum: 0`. The spec's `minimum: 0.00` permits it. That is a deliberate
+deviation and defensible, but it is a 400 the specification does not sanction, so
+it belongs in the "changes to the supplied specification" document rather than in
+the observations pile.
+
+**Brief should say:** promote the balance ceiling and the `tan-` pattern out of
+"note" and into the written-up changes, because both are cases where *the
+specification cannot be satisfied* rather than cases where it is merely odd. This
+is cheap to do and it is a strong artefact: noticing that a spec is internally
+unsatisfiable is a better signal than noticing that it has copy-pasted
+descriptions. Recommend stating the chosen behaviour (allow the balance to exceed
+the ceiling, and widen the id pattern) with one line of reasoning each.
+
+**Confirmed:** `UserResponse` and `BankAccountResponse` as emitted by this service
+validate cleanly against the supplied schemas in the ordinary case. §6 P7 is
+confirmed as a genuinely favourable constraint — the query-scoped fetch returns
+404 for a transaction requested under the wrong account number, and because
+`TransactionResponse` carries no `accountId` a fetch-then-compare implementation
+would have had nothing to compare.
+
+## F14 — §4 accepts bcryptjs's "chunked on-thread hashing"; it barely chunks
+
+**Brief, §4:** "Password hashing | `bcryptjs` | Pure JS, no native compilation, so
+`npm ci` cannot break on an unknown reviewer machine. **Accepts chunked on-thread
+hashing as the cost.**"
+
+The decision is right and the reasoning is right. The cost has no number attached,
+and the word "chunked" is doing more work than it can support.
+
+**Measured** at cost factor 10, in this devcontainer:
+
+| | Result |
+|---|---|
+| `bcrypt.hash` | ~52–62ms |
+| `bcrypt.compare` | ~55ms (so login costs the same as signup) |
+| 10 concurrent hashes | 538ms — **10.4x** one hash |
+| Event-loop ticks during an async hash | **1** |
+| Event-loop ticks during 50ms of genuinely yielding work | **45** |
+| `hashSync` | 52ms, **0** ticks |
+
+The async API does yield — once — so it is not identical to `hashSync`. But it is
+more than an order of magnitude away from work that actually interleaves. In
+practice a hash holds the event loop for ~50ms whichever API is called, and
+concurrent hashes serialise completely: there is no parallelism to be had, so
+ten simultaneous logins take half a second of wall clock and nothing else in the
+process runs meanwhile.
+
+**Brief should say:** keep bcryptjs — the `npm ci` reasoning is sound and 50ms is
+perfectly acceptable at this scale. Replace "accepts chunked on-thread hashing"
+with the number and the throughput consequence, because "~50ms per hash,
+serialised, roughly 20 logins per second per process, and a worker thread or
+native bcrypt is the fix at real scale" is a much better ADR line and a much
+better answer under questioning than "chunked".
+
+Worth one line too: `hashSync` is four characters away, appears in most examples,
+and blocks the process outright. Using the async API is a real decision here, not
+a default.
+
+## F15 — two design moves make §3 invariants structural rather than checklist items
+
+Not a defect in the brief — an opportunity it leaves on the table. Recorded here
+because both are cheap and both strengthen the part of §3 the brief itself calls
+out as unmechanised.
+
+**§5's concession is avoidable.** §5 evaluates `eslint-plugin-neverthrow`,
+correctly rejects it, and concludes: "The invariant moves to the human checklist."
+So §3's "**Every `Result` is handled**" ends up as the one invariant with no
+mechanical owner, and §5 identifies that as the worked example for the
+gap-register bullet about where mechanisation stops.
+
+It does not have to be. A handler adapter at the HTTP boundary makes it
+structural:
+
+```ts
+function handler<T>(fn: (req: Request) => Promise<Result<Success<T>, DomainError>>): RequestHandler
+```
+
+Handler functions never receive `res`, so they have no way to send a response —
+the only thing they can do with a Result is return it. `.match()` inside the
+adapter is the single place in the codebase where a Result is consumed, and it is
+exhaustive by construction. A handler that ignores its error channel is not a bug
+you have to spot in review; it is a program that does not typecheck.
+
+The same adapter closes §8's fifth criterion for free. §8 notes
+`res.json(undefined)` is "a silent empty success, and exactly the shape a handler
+falls into when a `Result`'s value is accidentally dropped". Typing the success
+channel as `Success<T>` makes a dropped value a type error instead.
+
+Stated honestly, the cost: handlers cannot stream, set custom headers, or send
+anything but JSON. For this API that is a fair trade; for one with file downloads
+it would not be. Verified across 20 end-to-end tests.
+
+**Authentication as a function, not middleware.** §3 already insists ownership
+checks live in the service layer, "not in middleware, not inferred from the path
+parameter". The same argument applies one step earlier to authentication itself.
+Middleware that mutates `req` leaves every downstream handler trusting that it
+ran, and the type system cannot express that: `req.userId` is either
+`string | undefined` — so every handler needs a redundant check — or it is lied
+about as `string`. A function returning `Result<UserId, DomainError>` means a
+handler that wants the caller's identity has to ask for it and deal with not
+getting it. No ambient state, and nothing to forget to register.
+
+**Brief should say:** add the adapter to step 1, alongside the error envelope. It
+is perhaps twenty lines, it lands before any endpoint exists, and it converts the
+brief's weakest invariant into a compile-time property. Then §5's honest "cost,
+not correctness" defence gets a much stronger ending: the plugin was rejected
+*and* the invariant was mechanised anyway, by design rather than by tooling.
