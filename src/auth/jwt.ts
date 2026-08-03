@@ -1,8 +1,9 @@
 import jwt from 'jsonwebtoken'
 import { err, ok, type Result } from 'neverthrow'
 import { unauthenticated, type DomainError } from '../domain/errors.js'
+// JwtPayload is still named here because `verifyToken`'s signature states it.
 import { jwtPayloadSchema, type JwtPayload } from '../http/schemas.js'
-import { validator } from '../http/validate.js'
+import { isJsonValidRz } from '../http/is-json-valid-rz.js'
 
 /**
  * Token issue and verify.
@@ -45,7 +46,7 @@ export function issueToken(userId: string, now = new Date()): string {
   )
 }
 
-const validatePayload = validator<JwtPayload>(jwtPayloadSchema)
+const validatePayload = isJsonValidRz(jwtPayloadSchema)
 
 export function verifyToken(token: string): Result<JwtPayload, DomainError> {
   let decoded: unknown

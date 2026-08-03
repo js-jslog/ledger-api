@@ -1,6 +1,7 @@
 import express, { type Express, type Request } from 'express'
 import { err, ok, type Result } from 'neverthrow'
 import type { Kysely } from 'kysely'
+import type { JSONSchema } from 'json-schema-to-ts'
 import { bearerToken, verifyToken } from '../auth/jwt.js'
 import type { Database } from '../db/schema.js'
 import { validationFailed, type DomainError } from '../domain/errors.js'
@@ -9,22 +10,23 @@ import { makeTransactionService } from '../service/transactions.js'
 import { makeUserService } from '../service/users.js'
 import { errorMiddleware, notFoundMiddleware } from './error-middleware.js'
 import { created, handler, okBody } from './handler.js'
-import {
-  createTransactionSchema,
-  createUserSchema,
-  type CreateTransactionBody,
-  type CreateUserBody,
-} from './schemas.js'
-import { validator } from './validate.js'
+import { createTransactionSchema, createUserSchema } from './schemas.js'
+import { isJsonValidRz } from './is-json-valid-rz.js'
 
 /**
  * Ingress validators are compiled once, at module load, not per request. Under
  * Ajv `strict: true` a malformed schema throws here -- at startup -- which is what
  * makes §6's spec defects impossible to ship.
  */
-const validateCreateUser = validator<CreateUserBody>(createUserSchema)
-const validateCreateTransaction = validator<CreateTransactionBody>(createTransactionSchema)
-const validateLogin = validator<{ email: string; password: string }>({
+const validateCreateUser = isJsonValidRz(createUserSchema)
+const validateCreateTransaction = isJsonValidRz(createTransactionSchema)
+
+// These two were inline object literals passed straight to the validator with a
+// hand-written type parameter beside them -- the same shape stated twice, with
+// nothing keeping the statements in agreement. Hoisted so `as const` can apply:
+// without it the literal types widen, `FromSchema` has nothing to infer from, and
+// the validated body degrades to `unknown` with no error at all.
+const loginSchema = {
   type: 'object',
   required: ['email', 'password'],
   properties: {
@@ -32,8 +34,10 @@ const validateLogin = validator<{ email: string; password: string }>({
     password: { type: 'string', minLength: 1 },
   },
   additionalProperties: false,
-})
-const validateCreateAccount = validator<{ name: string; accountType: 'personal' }>({
+} as const satisfies JSONSchema
+const validateLogin = isJsonValidRz(loginSchema)
+
+const createAccountSchema = {
   type: 'object',
   required: ['name', 'accountType'],
   properties: {
@@ -41,7 +45,8 @@ const validateCreateAccount = validator<{ name: string; accountType: 'personal' 
     accountType: { type: 'string', enum: ['personal'] },
   },
   additionalProperties: false,
-})
+} as const satisfies JSONSchema
+const validateCreateAccount = isJsonValidRz(createAccountSchema)
 
 /**
  * Authentication as a *function*, not middleware.

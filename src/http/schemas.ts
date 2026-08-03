@@ -1,14 +1,35 @@
-import type { FromSchema } from 'json-schema-to-ts'
+import type { FromSchema, JSONSchema } from 'json-schema-to-ts'
 
 /**
  * Ingress schemas, derived from the supplied OpenAPI with §6's changes applied:
  *   - `password` added to CreateUserRequest (forced change 1)
  *   - `format:` keywords holding regexes rewritten as `pattern:` (forced change 3)
  *
- * `as const satisfies` rather than a bare `as const`: the `satisfies` half gives
- * an error at the schema definition if it is not a valid JSON Schema, while
- * `as const` is what preserves the literal types FromSchema needs. Losing either
- * silently degrades the inferred type to `unknown` or `Record<string, unknown>`.
+ * `as const satisfies JSONSchema`, and both halves earn their place:
+ *
+ *   `as const` preserves the literal types `FromSchema` needs. It is load-bearing
+ *     rather than stylistic: without it the inferred body type degrades to
+ *     `unknown` **silently**, with no error anywhere. That is the single most
+ *     dangerous failure mode in this file.
+ *   `satisfies JSONSchema` checks the schema really is one at the point of
+ *     definition. An earlier version of this comment claimed that of
+ *     `satisfies Record<string, unknown>`, which checks essentially nothing -- it
+ *     accepts any object at all. Corrected.
+ *
+ * Neither guards the other, so `probe/03-validation/types.test.ts` asserts that
+ * each validated body type is not `unknown`.
+ *
+ * ONE SCHEMA CANNOT HAVE THE STRONGER GUARD. `json-schema-to-ts`'s `JSONSchema`
+ * types a *closed* set of keywords, so a registered Ajv custom keyword fails the
+ * excess-property check:
+ *
+ *     'currencyScale' does not exist in type 'Readonly<{ $id?: ... }>'
+ *
+ * So F6's 2dp mechanism and this type-level guard are mutually exclusive on
+ * `createTransactionSchema`. The keyword is worth more than the guard -- it is the
+ * only thing enforcing "at most two decimal places" -- so that schema keeps the
+ * weak `satisfies` and says so. `FromSchema` is unaffected; it ignores keywords it
+ * does not know.
  */
 
 /** The spec's nested address object, shared by create and update. */
@@ -41,7 +62,7 @@ export const createUserSchema = {
     password: { type: 'string', minLength: 12, maxLength: 72 },
   },
   additionalProperties: false,
-} as const satisfies Record<string, unknown>
+} as const satisfies JSONSchema
 
 export type CreateUserBody = FromSchema<typeof createUserSchema>
 
@@ -59,6 +80,8 @@ export const createTransactionSchema = {
     reference: { type: 'string', maxLength: 255 },
   },
   additionalProperties: false,
+  // NOT `satisfies JSONSchema` -- `currencyScale` is a custom keyword and that
+  // type is closed. See the header comment.
 } as const satisfies Record<string, unknown>
 
 export type CreateTransactionBody = FromSchema<typeof createTransactionSchema>
@@ -77,6 +100,6 @@ export const jwtPayloadSchema = {
     exp: { type: 'integer' },
   },
   additionalProperties: false,
-} as const satisfies Record<string, unknown>
+} as const satisfies JSONSchema
 
 export type JwtPayload = FromSchema<typeof jwtPayloadSchema>

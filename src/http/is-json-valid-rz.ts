@@ -1,14 +1,20 @@
 import { Ajv, type ErrorObject } from 'ajv'
+import type { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import addFormatsCjs from 'ajv-formats'
 import { err, ok, type Result } from 'neverthrow'
 import { validationFailed, type DomainError, type FieldError } from '../domain/errors.js'
 
 /**
- * Stand-in for the brief's `isJsonValidRz`: Ajv behind a `Result`, so one JSON
- * Schema is the source of truth for both runtime validation and the compile-time
- * type. The real implementation is not available to this session; what matters
- * here is that the seam works and that a `Result` covers the ingress path
- * (§4, §14).
+ * `isJsonValidRz` -- the single validation funnel. Ajv behind a `Result`, with the
+ * type assertion performed inside the funnel rather than at the call site, so one
+ * JSON Schema is the source of truth for both runtime validation and the
+ * compile-time type. Every ingress path passes through here, and (since part 3)
+ * every egress body too.
+ *
+ * A stand-in for the reference implementation of the same name, which was not
+ * available to this session. Note the shape: this is a *factory* -- it compiles a
+ * schema once and returns the validating function -- so the name reads more like a
+ * predicate than it behaves. Kept as-is so the code and the brief agree.
  *
  * ajv-formats is CJS whose dist does `module.exports = exports = formatsPlugin`,
  * while its .d.ts declares an ESM `export default`. Under nodenext + ESM,
@@ -66,34 +72,43 @@ function toFieldError(e: ErrorObject): FieldError {
 }
 
 /**
- * Compiles a schema once, at module load, into a validator that narrows
- * `unknown` to `T` on the ok channel.
+ * Compiles a schema once, at module load, into a validator that narrows `unknown`
+ * to the schema's own inferred type on the ok channel.
  *
- * NOTE ON THE SIGNATURE. The obvious shape is to infer the result type from the
- * schema:
+ * THE POINT OF THE SIGNATURE. The asserted type is *derived* from the schema
+ * argument, so there is no second place to state the shape and therefore no way
+ * to state it differently. The earlier shape here was
+ * `validator<T>(schema: object)`, which left the two independent — and
+ * `validator<CreateTransactionBody>(createUserSchema)` typechecked cleanly. That
+ * mismatched assertion is now unrepresentable rather than something review has to
+ * catch.
  *
- *     function validator<const S extends JSONSchema>(schema: S):
- *       (body: unknown) => Result<FromSchema<S>, DomainError>
+ * WHY `S extends object` AND NOT `S extends JSONSchema`. Constraining to
+ * `JSONSchema` and returning `FromSchema<S>` fails with TS2589 "type
+ * instantiation is excessively deep" and TS2590 "union type too complex", because
+ * an unresolved `FromSchema<S>` gets distributed across the whole `JSONSchema`
+ * union and multiplied by the `DomainError` union inside `Result`. Constraining to
+ * `object` leaves no union to distribute over, and the intersection is applied at
+ * the instantiation site instead. Verified: project-wide `tsc --noEmit` is clean
+ * with no explicit type argument at any of the five call sites, and typecheck wall
+ * time is unchanged. See FINDINGS.md F7.
  *
- * That compiles in isolation and fails here, with TS2589 "type instantiation is
- * excessively deep" and TS2590 "union type too complex". The cause is the
- * multiplication: an unresolved `FromSchema<S>` over the whole `JSONSchema`
- * union, against the seven-member `DomainError` union, inside a `Result`.
- * Annotating the inner arrow's return type and supplying explicit type arguments
- * to `ok`/`err` each move the error but do not remove it.
+ * THE HAZARD THIS CREATES. Inference depends on the schema being `as const`.
+ * Without it the literal types are widened, `FromSchema` has nothing to work from,
+ * and the body degrades to `unknown` **silently** — no error, just a validated
+ * body you cannot read. The `as const` in `schemas.ts` is therefore load-bearing,
+ * not advisory. `probe/03-validation/types.test.ts` asserts each validated body is
+ * not `unknown` precisely because the compiler will not.
  *
- * So the type parameter is named by the caller instead:
- *
- *     const validateCreateUser = validator<CreateUserBody>(createUserSchema)
- *
- * with `CreateUserBody = FromSchema<typeof createUserSchema>` declared once,
- * beside the schema. `FromSchema` is then only ever instantiated against a
- * concrete literal schema type, which is cheap. The single-source-of-truth
- * property is unchanged -- the shape is still written exactly once, in the schema
- * -- at the cost of naming the type at each call site, which is a readability
- * gain rather than a loss.
+ * THE FALLBACK, IF A FUTURE TYPESCRIPT REINTRODUCES THE BLOWUP. Retreat to
+ * `isJsonValidRz<FromSchema<typeof createUserSchema>>(createUserSchema)`, which
+ * also compiles here. It does not make a mismatch a type error, but it at least
+ * keeps the type textually adjacent to the schema it was derived from.
  */
-export function validator<T>(schema: object): (body: unknown) => Result<T, DomainError> {
+export function isJsonValidRz<S extends object>(
+  schema: S,
+): (body: unknown) => Result<FromSchema<S & JSONSchema>, DomainError> {
+  type T = FromSchema<S & JSONSchema>
   const compiled = ajv.compile(schema)
   return (body: unknown): Result<T, DomainError> => {
     // §8: a text/plain or absent content-type leaves req.body undefined, not {}.

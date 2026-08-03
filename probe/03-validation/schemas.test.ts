@@ -4,8 +4,8 @@ import addFormatsCjs from 'ajv-formats'
 // See src/http/validate.ts for why this cast is necessary.
 const addFormats = addFormatsCjs as unknown as (typeof addFormatsCjs)['default']
 import { describe, expect, test } from 'vitest'
-import { ajv, validator } from '../../src/http/validate.js'
-import { createUserSchema, type CreateUserBody } from '../../src/http/schemas.js'
+import { ajv, isJsonValidRz } from '../../src/http/is-json-valid-rz.js'
+import { createUserSchema } from '../../src/http/schemas.js'
 
 // `currencyScale` is registered in src/http/validate.ts, beside the Ajv instance.
 // It started out registered here, in the test file -- which made the production
@@ -21,7 +21,7 @@ const validUser = {
 }
 
 describe('additionalProperties: false, nested (§3)', () => {
-  const validate = validator<CreateUserBody>(createUserSchema)
+  const validate = isJsonValidRz(createUserSchema)
 
   test('accepts a well-formed body', () => {
     expect(validate(validUser).isOk()).toBe(true)
@@ -58,7 +58,7 @@ describe('additionalProperties: false, nested (§3)', () => {
       },
       additionalProperties: false,
     } as const
-    const validate = validator<{ address: { line1: string } }>(leaky)
+    const validate = isJsonValidRz(leaky)
     expect(validate({ address: { line1: 'x', isAdmin: true } }).isOk()).toBe(true)
   })
 })
@@ -69,7 +69,7 @@ describe('mass assignment beyond unknown keys', () => {
     // that the classic pollution key is genuinely treated as an unknown key
     // rather than slipping past as an inherited property.
     const parsed: unknown = JSON.parse('{"name":"x","__proto__":{"isAdmin":true}}')
-    const result = validator<CreateUserBody>(createUserSchema)(parsed)
+    const result = isJsonValidRz(createUserSchema)(parsed)
     expect(result.isErr()).toBe(true)
     // And the prototype was not polluted in the process.
     expect(({} as Record<string, unknown>).isAdmin).toBeUndefined()
@@ -121,7 +121,7 @@ describe('the spec defects Ajv strict mode catches, and the one it does not', ()
 
 describe('undefined body (§8 criterion 4) is handled before Ajv sees it', () => {
   test('undefined becomes a 400-shaped ValidationFailed, not a 500', () => {
-    const result = validator<CreateUserBody>(createUserSchema)(undefined)
+    const result = isJsonValidRz(createUserSchema)(undefined)
     expect(result.isErr()).toBe(true)
     const error = result._unsafeUnwrapErr()
     if (error.kind === 'ValidationFailed') {
