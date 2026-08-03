@@ -150,9 +150,10 @@ because the 403 leaks existence; the spec asked for 403 so I built 403 and wrote
 
 `^01\d{6}$` is 10^6 values and it is the public account identifier. Sequential
 allocation makes every other customer's account trivially guessable. Random allocation
-collides — birthday bound puts you at ~1% collision probability by ~4,500 accounts — so
-the generator needs a uniqueness retry. The brief does not mention account number
-generation at all, and it is a nice small thing to have an opinion about.
+collides fast — the birthday bound puts you at **1% collision probability by 142
+accounts** and **50% by 1,177** — so the generator needs a uniqueness retry, which
+`src/domain/ids.ts` has. The brief does not mention account number generation at all,
+and it is a nice small thing to have an opinion about.
 
 ### 8. Kysely's naive table interface will not compile INSERTs
 
