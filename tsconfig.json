@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src", "test", "probe", "*.ts"]
+  "include": ["src", "migrations", "probe", "*.ts"]
 }

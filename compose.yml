@@ -1,0 +1,21 @@
+# Postgres for local development and tests.
+#
+# Under the docker-in-docker devcontainer feature the inner daemon shares this
+# container's network namespace, so the published port lands on localhost and the
+# connection string is identical to a reviewer's standalone `docker compose up`.
+# The compose service name `db` is NOT resolvable from the devcontainer -- see
+# FINDINGS.md F3, which corrects the brief on this point.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_USER: ledger
+      POSTGRES_DB: ledger
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger"]
+      interval: 1s
+      timeout: 3s
+      retries: 30

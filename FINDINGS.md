@@ -17,6 +17,10 @@ during the real 12-hour build or the pair-coding session?**
 | F6 | §4 forbids `multipleOf: 0.01` but names no replacement, and the obvious one is worse | **Gap — forced build item** |
 | F7 | The Ajv + json-schema-to-ts + neverthrow seam does not typecheck in its natural shape | **High — §14's predicted seam** |
 | F8 | The linter advises a change that silently breaks the error handler | Moderate |
+| F9 | A "fresh" compose Postgres silently inherits a stale volume, and the failure looks like a broken migration | **High — reviewer-visible** |
+| F10 | §7's justification for the 422 is wrong; a zero-row update can mean 404 | **High — walkthrough risk** |
+| F11 | Account-number minting is a forced build item with no decision recorded | **Gap — forced build item** |
+| F12 | Nobody is assigned to maintain the timestamps the spec requires | Moderate |
 
 Confirmed as stated, no correction needed: all five §8 Express 5 acceptance
 criteria; the `never`-based exhaustiveness check; and §14's "async middleware
@@ -400,3 +404,207 @@ afterwards.
 reason in a comment, so the tooling cannot advise breaking the app. Cheap, and it
 belongs next to the §8 acceptance criteria rather than being discovered mid-build
 with a plausible-looking auto-fix on offer.
+
+## F9 — a "fresh" compose Postgres inherits a stale volume, and it presents as a broken migration
+
+**Brief:** §10 budgets step 0 for getting the database reachable, and §11's
+fallback covers "the database layer is not working". Neither anticipates a
+database that is reachable and working and *wrong*.
+
+**Observed.** With a `compose.yml` declaring **no `volumes:` stanza at all**, the
+first migration run failed:
+
+```
+error: relation "users" already exists
+```
+
+Inspecting the database found tables from an earlier session — including
+`idempotency_keys` and `int_probe`, which this codebase never creates — and,
+critically, an **empty `kysely_migration` table alongside a fully populated
+schema**.
+
+The mechanism: the `postgres` image declares
+`VOLUME /var/lib/postgresql/data`, so Docker creates an *anonymous* volume even
+when compose asks for none, and compose carries that volume across container
+recreation. Evidenced by timestamps — the container was created at 13:32:18 and
+its attached data volume dates from 08:11:02, five hours earlier:
+
+```
+Created: 2026-08-03T13:32:18Z          <- container, brand new
+volume  4bccbab...  created=2026-08-03T08:11:02Z   <- its data
+```
+
+`docker compose down` without `-v` leaves the volume in place, so the ordinary
+"turn it off and on again" does not clear it.
+
+**Why this is worth a finding rather than a shrug.** The presenting symptom
+accuses the wrong component. `relation "users" already exists` from
+`migrateToLatest` reads as a bug in the migration, and the natural response is to
+start editing the migration or reaching for `ifNotExists` — which would "fix" the
+error while leaving the schema drifted from the ledger, and bake in a real bug.
+Two of §11's stop-line conditions could be consumed chasing this.
+
+It is also **reviewer-visible**, which matters more. The reviewer runs
+`docker compose up`, and if they iterate at all they can land in the same state
+with no way to know the cause.
+
+**Brief should say:**
+- Declare the volume explicitly in `compose.yml` and name it, so it is visible
+  and so `docker compose down -v` obviously governs it.
+- Do not let the test suite trust the database it is handed. A
+  `drop schema public cascade; create schema public` before migrating costs tens
+  of milliseconds and makes a run reproducible regardless of what the volume
+  carried, including a drifted ledger. Implemented here as `src/db/reset.ts`.
+- Put `docker compose down -v` in the README's troubleshooting line.
+
+## F10 — §7's justification for the 422 is wrong, and it misreports 404 as 422
+
+**Brief, §7:** "**Why the ownership resolve stays a separate query.** Folding
+`user_id` into the conditional `UPDATE` would collapse 403, 404 and 422 into one
+indistinguishable zero-row result. The separate resolve exists to keep the status
+taxonomy intact — and because it runs first, **a zero-row update can only mean
+insufficient funds → 422**."
+
+The design conclusion is right. The reasoning for it is not, and the last clause
+is false.
+
+**Observed.** The ownership resolve and the conditional UPDATE are two separate
+statements on two separate connections. Anything that removes the row in between
+produces a zero-row update for a reason that is *not* insufficient funds:
+
+```
+resolveForOwner('01000001', 'usr-owner')  -> ok        (not 403, not 404)
+DELETE FROM accounts WHERE account_number = '01000001'
+debitIfSufficient('01000001', 1_000)      -> InsufficientFunds
+```
+
+Verified. The client is told **422 "Insufficient funds to process transaction"**
+for an account that does not exist — and in the observed case the account had
+£100.00 in it moments earlier and the withdrawal was £10.00. The correct answer
+is 404.
+
+This is not hypothetical for this build: the racing endpoint is
+`DELETE /v1/accounts/{accountNumber}`, which the spec defines and §9 defers. So
+the brief ships the vulnerable half and defers the half that triggers it, which
+is the most likely way for this to go unnoticed.
+
+**Why it matters more than its likelihood.** §7 is the section the brief is
+proudest of, and ADR 2 is built on it. "A zero-row update can only mean
+insufficient funds" is exactly the kind of confident, load-bearing claim a staff
+interviewer probes in a walkthrough, and "what if the row was deleted?" is the
+first question to ask. Being the one to raise it is a much better position than
+being shown it.
+
+**The fix is cheap and does not touch the happy path.** On zero rows, ask whether
+the row exists at all, and map to 404 or 422 accordingly. That second query only
+runs on the failure path:
+
+```
+zero rows -> SELECT account_number WHERE account_number = ?
+             found     -> InsufficientFunds (422)
+             not found -> NotFound (404)
+```
+
+**Brief should say:** keep the design, replace the justification. The honest
+version is "the separate resolve keeps 403 distinguishable, and a zero-row update
+is then disambiguated between 404 and 422 by a follow-up existence check on the
+failure path only". Note also that under a serialisable isolation level this
+whole class of interleaving becomes a `40001` instead — which §7 already knows
+about for a different reason.
+
+**Confirmed as stated, independently reproduced:** two £100 withdrawals from £100
+gave one success, one 422, balance 0 and exactly one transaction row. Twenty
+concurrent £10 withdrawals from £100 gave exactly ten successes and a zero
+balance. The naive read-modify-write lost the update, taking £200 from a £100
+account with both callers reporting success. REPEATABLE READ produced `40001`.
+`Migrator` is indeed only on the `kysely/migration` subpath in 0.29.4 — both it
+and `FileMigrationProvider` are `undefined` on the root export. All of §4's money
+claims hold: int4 parses as `number`, int8 and `numeric` both come back as
+**strings**, `sum(integer)` comes back as a string, and int4 overflow is a hard
+error rather than a silent wrap. The "lying type declaration" is real and
+demonstrable — `row.as_int8 + 1` typechecks and evaluates to the string
+`'10991'`.
+
+## F11 — account-number minting is a forced build item with no decision recorded
+
+**Brief:** §9 puts `POST /v1/accounts` in scope. §4's closed-decisions table
+covers money, locking, hashing, DI, errors, validation and testing — and says
+nothing about where an `accountNumber` comes from. But the spec makes it the
+resource identifier in four path templates and constrains it to `^01\d{6}$`, so
+minting one is unavoidable and it contains a real decision.
+
+**Observed.** The keyspace is exactly **10^6**: `01` is fixed and six digits are
+free. Eight characters reads much larger than it is. Birthday bound:
+
+| Accounts | Chance of at least one collision |
+|---|---|
+| 10 | 0.004% |
+| 100 | 0.494% |
+| 1,000 | 39.3% |
+| 10,000 | ~100% |
+
+A take-home will never collide. That is not the point — the point is that the
+*failure mode* has to be chosen, and left unchosen it is a **500 on a request
+that should have succeeded**: an unhandled `23505` unique violation, verified.
+
+Two defensible designs, and the choice is worth one line in an ADR:
+
+- **Postgres sequence** (`01` + zero-padded `nextval`). Cannot collide. Makes
+  every account number trivially guessable and leaks the bank's total account
+  count.
+- **Random plus insert-and-retry.** Numbers stay opaque. Costs a bounded retry
+  loop. Chosen here.
+
+Two details the retry loop gets wrong if written quickly:
+
+- It must retry **only** on `23505`. A foreign-key violation — user deleted
+  between authentication and account creation — is not retryable; retrying burns
+  four more round trips and then reports an account-number allocation failure for
+  a problem that had nothing to do with account numbers. Verified both branches.
+- Insert-and-retry, not check-then-insert. The unique constraint is the arbiter,
+  so there is no window for a concurrent creator to take the number between the
+  check and the insert.
+
+A `CHECK (account_number ~ '^01[0-9]{6}$')` constraint is worth adding regardless
+— it makes the spec's format a database invariant rather than a property of
+whichever code path happened to mint the value. Verified rejecting `99999999`.
+
+**Brief should say:** add a row to §4's closed decisions, and note that the
+keyspace is small enough to be a real design point rather than an implementation
+detail. It is also a good gap-register entry if a sequence is chosen for speed.
+
+## F12 — nobody is assigned to maintain the timestamps the spec requires
+
+**Brief:** silent. `createdTimestamp` and `updatedTimestamp` are `required` on
+`UserResponse` and `BankAccountResponse`, and every mutating endpoint has to move
+`updatedTimestamp`. §3's invariant list covers ownership, money, atomicity and
+append-only transactions, but not this.
+
+**Observed.** This surfaced as a typecheck error rather than a thought, which is
+the interesting part. Declaring the columns
+`ColumnType<Date, never, never>` — "the database owns these" — made the
+repository's `updated_at: new Date()` a compile error. The type was right and the
+code was wrong.
+
+The choice it forces:
+
+- **Application-maintained.** Every write path must remember. Forgetting is
+  silent: the row is correct, the timestamp is stale, and no test that does not
+  specifically assert on timestamps will notice. It also has to be remembered in
+  write paths nobody has designed yet, which is precisely the PATCH endpoints §9
+  defers.
+- **Trigger-maintained.** One `before update` trigger per table. Unforgettable,
+  and it lets the Kysely column type keep declaring `never` in the update
+  position, so the type system now *enforces* that the app does not try.
+
+Chosen the trigger here, and verified it: `debitIfSufficient` sets only
+`balance_pennies`, and `updated_at` still moves while `created_at` does not.
+`timestamptz` is one of the types node-postgres does parse, so these come back as
+real `Date` objects — unlike int8.
+
+Worth noting the pleasing consequence: `transactions` has **no** `updated_at`
+column at all, which is part of the append-only guarantee in §3 rather than an
+omission. There is nothing for an UPDATE to plausibly maintain.
+
+**Brief should say:** one line in §3's invariant list, and one row in §4. It is a
+five-minute decision that is very hard to retrofit once several write paths exist.
