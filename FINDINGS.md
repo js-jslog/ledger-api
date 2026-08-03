@@ -13,6 +13,11 @@ during the real 12-hour build or the pair-coding session?**
 | F2 | `pnpm add -D typescript` installs TS 7, which typescript-eslint refuses | **Blocker, step 0** |
 | F3 | The devcontainer/compose risk in §10 is described backwards | Fixable — reclaims stop-line budget |
 | F4 | vitest isolation needs two settings, and the second is not the obvious one | Moderate |
+| F5 | §8 is sound and complete as far as it goes; two gaps in the assembly around it | Moderate |
+
+Confirmed as stated, no correction needed: all five §8 Express 5 acceptance
+criteria; the `never`-based exhaustiveness check; and §14's "async middleware
+error propagation" unknown, which resolves in the brief's favour.
 
 ---
 
@@ -167,3 +172,51 @@ and total connection count scale with the number of test files.
 `isolate` as the one that matters, and record the cost — `isolate: false` leaks
 module state between files, so anything cached at module scope becomes
 deliberate. `singleFork` is not needed once `fileParallelism` is false.
+
+## F5 — §8's five criteria all hold; two gaps sit just outside them
+
+**Brief, §8:** lists five Express 5 specifics as `[verified]` and calls them
+"acceptance criteria for step 1".
+
+**Observed.** All five reproduce exactly as described (probe 02, 11 passing
+tests). Nothing to correct. Three things to add.
+
+**Closes a §14 unknown, favourably.** §14 lists "async middleware error
+propagation" as unverified, and the JWT middleware's 401 path depends on it. A
+rejected promise thrown from `async` *middleware* — not just an async route
+handler — does reach the error middleware and render through the one renderer.
+The brief can treat this as settled.
+
+**Gap 1 — the four-parameter rule, and why TypeScript does not save you.**
+Express decides a function is an error handler purely by `fn.length === 4`.
+Write three parameters and it becomes ordinary middleware: the error skips it,
+Express's default handler runs, and the stack-trace leak that criterion 3 exists
+to close is silently reinstated. Verified — the three-argument handler's body
+never executes and the response contains `at ` stack frames.
+
+The interesting part is the TypeScript story, because the obvious assumption is
+that `strict: true` covers this. It does not, quite. TS does not report "wrong
+arity for an error handler"; it silently reinterprets `(err, req, res)` as
+`(req, res, next)` and the only diagnostic is:
+
+```
+Property 'status' does not exist on type 'NextFunction'
+```
+
+That points at the body, never at the arity. You are protected, but by a
+misleading error. Annotating the handler `ErrorRequestHandler` is what makes the
+protection legible, so §8 should say so explicitly rather than leaving it to
+chance.
+
+**Gap 2 — `res.headersSent` needs a branch in the renderer path.** A handler
+that writes a response and then throws sends the error to the middleware with the
+response already committed. The one renderer's first act is `res.status(...)`,
+which throws `Cannot set headers after they are sent`, from inside the error
+handler — the one place with nothing above it to catch. §8's "one renderer"
+design needs a guard ahead of it. One `if (res.headersSent) { res.end(); return }`
+is enough, and it belongs in the criteria list as a sixth item.
+
+**Minor:** the working path-to-regexp v8 spelling is `'/*splat'`, if a named
+catch-all is ever wanted. Verified as not throwing, unlike `'*'`. The brief's
+recommendation (a path-less `app.use`) remains the better choice; this is only
+worth knowing because the v8 error message pushes you toward the splat form.
