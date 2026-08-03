@@ -212,12 +212,31 @@ schema, commit them, fail CI on drift) is the on-brand answer, and it is cheap.
   `minProperties`**, so `{}` is a valid PATCH. Deferred, but it is the deferral note.
 - **The two supplied documents disagree on a path parameter name**: the scenarios say
   `accountId` throughout, the spec says `accountNumber`. Pick the spec and say so.
-- **`pnpm` skew in the devcontainer**: the Dockerfile pins `pnpm@10.21.0` but with no
-  `packageManager` field corepack fetched 11.18.0, and pnpm 11 moved
-  `onlyBuiltDependencies` out of `package.json` into `pnpm-workspace.yaml`. Also
-  `pnpm init` writes a range (`^11.18.0`) that corepack then refuses. Pin
-  `packageManager` explicitly. The `npm ci` in §4.4 is
-  `pnpm install --frozen-lockfile` here.
+- **pnpm 11 blocks *every* script until build approvals are resolved.** This one bit
+  the reader of this repo before it bit me, because I ran the probes with
+  `npx vitest run` and never exercised `pnpm test`. Chain of events:
+  1. The Dockerfile pins `pnpm@10.21.0`, but with no `packageManager` field corepack
+     fetched **11.18.0** instead. `pnpm init` then writes a *range* (`^11.18.0`) that
+     corepack refuses outright.
+  2. pnpm 11 no longer reads `pnpm.onlyBuiltDependencies` from `package.json`; it warns
+     and ignores. The setting moved to `pnpm-workspace.yaml`.
+  3. But in pnpm 11 the key is **`allowBuilds: { <pkg>: true|false }`**, not
+     `onlyBuiltDependencies`. When it encounters a blocked build script, pnpm *writes a
+     placeholder into your `pnpm-workspace.yaml` itself* —
+     `esbuild: set this to true or false` — which is a string, not a boolean, so the
+     approval stays unresolved.
+  4. pnpm 11 verifies dependency status **before running any script**, so an unresolved
+     approval means `pnpm test` exits 1 with a stack trace from `runDepsStatusCheck`,
+     never reaching vitest. The error names `esbuild`, which looks like a build problem
+     and is actually a config problem.
+
+  Fix: pin `packageManager` explicitly, and resolve every entry in `allowBuilds` to a
+  real boolean. Escape hatch if it ever gets in the way mid-session:
+  `pnpm --config.verify-deps-before-run=false test`.
+
+  **Lesson for the real build:** run the *scripts* at least once, not just the
+  underlying tools. `npx vitest run` passing tells you nothing about `pnpm test`. The
+  `npm ci` in §4.4 is `pnpm install --frozen-lockfile` here.
 - **`import Ajv from 'ajv'` does not typecheck** under `module: nodenext` +
   `verbatimModuleSyntax`, though it runs fine — TS resolves the CJS default to the
   namespace object. `import { Ajv } from 'ajv'` works; `ajv-formats` has only a default

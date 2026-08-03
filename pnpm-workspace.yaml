@@ -1,4 +1,9 @@
+# pnpm 11 replaced `onlyBuiltDependencies` with this map. Every package whose
+# install scripts pnpm blocks must be explicitly resolved to true or false, or
+# `pnpm <script>` fails before running anything (pnpm 11 verifies dependency
+# status before each run).
+#
+# esbuild: allowed. Its postinstall links the platform-specific binary that
+# vitest's transform pipeline uses.
 allowBuilds:
-  esbuild: set this to true or false
-onlyBuiltDependencies:
-  - esbuild
+  esbuild: true
