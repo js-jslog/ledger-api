@@ -7,7 +7,7 @@ import request from 'supertest'
 import { Ajv } from 'ajv'
 import addFormatsModule from 'ajv-formats'
 import { connect } from '../src/db/connect.js'
-import { makeApp } from '../src/http/app.ts'
+import { makeApp } from '../src/http/app.js'
 
 const addFormats = addFormatsModule as unknown as (a: Ajv) => Ajv
 const ajv = addFormats(new Ajv({ strict: true, allErrors: true }))

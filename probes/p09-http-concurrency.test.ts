@@ -2,7 +2,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 import { connect } from '../src/db/connect.js'
-import { makeApp } from '../src/http/app.ts'
+import { makeApp } from '../src/http/app.js'
 
 const SECRET = 'probe-secret'
 const db = connect('postgres://ledger:ledger@localhost:5432/ledger')

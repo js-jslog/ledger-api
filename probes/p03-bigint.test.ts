@@ -22,6 +22,10 @@ interface DB {
     email: string; password_hash: string
     created_timestamp: Date; updated_timestamp: Date
   }
+  transactions: {
+    id: string; account_number: string; user_id: string; amount_pence: number
+    currency: string; type: string; reference: string | null; created_timestamp: Date
+  }
 }
 
 const pool = new pg.Pool({
@@ -33,6 +37,9 @@ afterAll(async () => { await db.destroy() })
 
 describe('BIGINT round-trip through node-postgres', () => {
   it('BREAKS: the column typed `number` comes back as a string', async () => {
+    // Order matters, and so does deleting tables this file never writes to:
+    // serialised test files still inherit whatever the previous file left behind.
+    await db.deleteFrom('transactions').execute()
     await db.deleteFrom('accounts').execute()
     await db.deleteFrom('users').execute()
     await db.insertInto('users').values({
@@ -109,5 +116,37 @@ describe('the fix, and what else it touches', () => {
 
     const { rows } = await pool.query('SELECT count(*) AS n FROM accounts')
     expect(typeof rows[0].n).toBe('number') // now a number, thanks to the parser
+  })
+})
+
+describe('was BIGINT the right column type at all?', () => {
+  it('INTEGER needs no parser, and its range is 2000x the spec ceiling', async () => {
+    await pool.query('DROP TABLE IF EXISTS int_probe')
+    await pool.query('CREATE TABLE int_probe (as_int4 INTEGER, as_int8 BIGINT, as_numeric NUMERIC(12,2))')
+    await pool.query('INSERT INTO int_probe VALUES (1000000, 1000000, 10000.00)')
+
+    // NOTE: a "fresh" pool is not fresh. `pg.types.setTypeParser` mutates module-level
+    // state shared by every pool in the process, so the parser installed by the test
+    // above is still in effect here. That is itself worth knowing: you cannot have
+    // parsed and unparsed int8 coexisting, and any dependency that assumed int8-as-
+    // string silently changes behaviour the moment the parser is installed.
+    const anotherPool = new pg.Pool({ connectionString: 'postgres://ledger:ledger@localhost:5432/ledger' })
+    const { rows } = await anotherPool.query('SELECT * FROM int_probe')
+    expect(typeof rows[0].as_int4).toBe('number') // int4 (oid 23): number, no parser needed
+    expect(typeof rows[0].as_int8).toBe('number') // int8: number only because of the global parser
+    expect(typeof rows[0].as_numeric).toBe('string') // numeric (oid 1700): still a string
+    await anotherPool.end()
+
+    // int4 needs no parser at all. Verified against a subprocess with no parser
+    // installed would be belt-and-braces; the OID mapping in pg's source is
+    // unambiguous (builtins.INT4 is parsed with parseInt by default).
+
+    // The spec caps a balance at 10000.00 = 1,000,000 pence.
+    // INTEGER holds 2,147,483,647 pence = 21,474,836.47 pounds.
+    expect(2_147_483_647).toBeGreaterThan(1_000_000 * 2000)
+    // So BIGINT buys no headroom that matters here, and is the specific choice that
+    // creates the string-coercion bug class the type parser then has to repair.
+    // BIGINT is the right answer for a real ledger (where a total-value column can
+    // exceed 2^31 pence) but that is an argument to make deliberately, not by reflex.
   })
 })

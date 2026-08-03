@@ -6,7 +6,10 @@
   "packageManager": "pnpm@11.18.0",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/src/main.js",
+    "db:schema": "docker compose exec -T db psql -U ledger -d ledger -q < src/db/schema.sql"
   },
   "dependencies": {
     "ajv": "^8.20.0",
