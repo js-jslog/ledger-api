@@ -5,8 +5,11 @@ run before the real 12-hour build, to find the problems that would otherwise be
 found at 11pm on evening two. The code is real and works, but it exists to make
 claims falsifiable, not to be submitted.
 
-The output is [`FINDINGS.md`](./FINDINGS.md) — fifteen findings, each stating what
+The output is [`FINDINGS.md`](./FINDINGS.md) — eighteen findings, each stating what
 the brief claims, what actually happens, and what the brief should say instead.
+F1–F15 are the original probe; F16–F18 record follow-up work that closed three
+things the first pass left open, and **F7 carries an amendment** because that
+follow-up proved its conclusion too strong.
 
 ## What to read, in what order
 
@@ -22,11 +25,12 @@ the brief claims, what actually happens, and what the brief should say instead.
 | | |
 |---|---|
 | Confirmed as the brief states | All five §8 Express 5 criteria; every §7 concurrency figure; every §4 money claim; the `kysely/migration` subpath; nested `additionalProperties`; §6 P7 |
-| §14 unknowns resolved **favourably** | Async middleware error propagation; the four-library seam at runtime; suite time (**~6s**, 101 tests, full DB integration) |
-| §14 unknowns resolved **unfavourably** | The devcontainer/compose risk is described backwards (F3); the four-library seam does not *typecheck* in its natural shape (F7) |
+| §14 unknowns resolved **favourably** | Async middleware error propagation; the four-library seam at runtime; suite time (**~6s**, 127 tests, full DB integration) |
+| §14 unknowns resolved **unfavourably** | The devcontainer/compose risk is described backwards (F3); the four-library seam does not typecheck in its *natural* shape (F7, amended — a working inferring shape does exist) |
 | Step-0 blockers the brief does not mention | pnpm 11's build-script gate (F1); TypeScript 7 vs typescript-eslint (F2) |
 | Claims that are wrong | §7's justification for the 422 (F10) |
 | Forced build items with no decision recorded | 2dp money validation (F6); account-number minting (F11); timestamp maintenance (F12) |
+| §3 invariants moved off the human checklist | "Every `Result` is handled" and the dropped-value hazard (F15); "no password hash reaches a response body" (F18) |
 
 The findings most worth acting on before the real build starts are **F10** (§7's
 "a zero-row update can only mean insufficient funds" is false, and §7 is the
@@ -42,7 +46,7 @@ Requires Docker and pnpm. From the repository root:
 pnpm install                 # read pnpm-workspace.yaml before changing it
 docker compose up -d --wait  # Postgres on localhost:55432, healthy in ~3s
 docker compose exec -T db psql -U ledger -d ledger -c 'CREATE DATABASE ledger_probe'
-pnpm vitest run              # 101 tests, ~6s
+pnpm vitest run              # 127 tests, ~6s
 pnpm typecheck && pnpm lint  # both clean
 ```
 

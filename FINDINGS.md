@@ -15,7 +15,7 @@ during the real 12-hour build or the pair-coding session?**
 | F4 | vitest isolation needs two settings, and the second is not the obvious one | Moderate |
 | F5 | §8 is sound and complete as far as it goes; two gaps in the assembly around it | Moderate |
 | F6 | §4 forbids `multipleOf: 0.01` but names no replacement, and the obvious one is worse | **Gap — forced build item** |
-| F7 | The Ajv + json-schema-to-ts + neverthrow seam does not typecheck in its natural shape | **High — §14's predicted seam** |
+| F7 | The Ajv + json-schema-to-ts + neverthrow seam blows up in its natural shape — **amended**, a working inferring shape does exist | **High — §14's predicted seam** |
 | F8 | The linter advises a change that silently breaks the error handler | Moderate |
 | F9 | A "fresh" compose Postgres silently inherits a stale volume, and the failure looks like a broken migration | **High — reviewer-visible** |
 | F10 | §7's justification for the 422 is wrong; a zero-row update can mean 404 | **High — walkthrough risk** |
@@ -24,8 +24,11 @@ during the real 12-hour build or the pair-coding session?**
 | F13 | §6's "note, don't build" pile is not costless — the API can violate its own published schema | **High — reviewer-visible** |
 | F14 | §4 accepts bcryptjs's "chunked on-thread hashing"; it barely chunks | Moderate |
 | F15 | Two design moves make §3 invariants structural rather than checklist items | Opportunity |
+| F16 | The validation funnel left the asserted type and the schema unbound — now closed | **Closed by the follow-up work** |
+| F17 | Correlation ids and log-at-construction, and the three guards the intersection added | Addition |
+| F18 | Nothing checked what the service sends back; egress validation catches a hash leak | **High — closes a §3 invariant** |
 
-**Suite time**, which §14 lists as unmeasured: **101 tests across 14 files in ~6s
+**Suite time**, which §14 lists as unmeasured: **127 tests across 16 files in ~6s
 wall clock**, including full Postgres integration and 20 end-to-end HTTP tests.
 Roughly a third of that is bcrypt (F14). Serialised execution (F4) is not the
 bottleneck at this size, so §4's isolation strategy costs nothing worth
@@ -311,7 +314,25 @@ composition root.
 alongside the spec edits, and record `Number.isInteger(x*100)` as an explicitly
 rejected option — because it is what the session will suggest.
 
-## F7 — the Ajv + json-schema-to-ts + neverthrow seam does not typecheck in its natural shape
+## F7 — the Ajv + json-schema-to-ts + neverthrow seam blows up in its natural shape
+
+> **AMENDED after the follow-up work.** The diagnosis below is correct and worth
+> keeping: the blowup is real, it is a three-way interaction, and probing the
+> libraries separately could not have found it. **The conclusion was too strong.**
+> A working inferring shape does exist — constrain the type parameter to `object`
+> so there is no `JSONSchema` union to distribute over, and apply the intersection
+> at the instantiation site:
+>
+> ```ts
+> export function isJsonValidRz<S extends object>(
+>   schema: S,
+> ): (body: unknown) => Result<FromSchema<S & JSONSchema>, DomainError>
+> ```
+>
+> Verified project-wide with every explicit type argument deleted from all five
+> call sites: clean `tsc`, 127 tests green, typecheck 1.9s. See **F16**, which is
+> what this change bought. The paragraph beginning "The shape that does work"
+> below describes the *fallback*, not the recommendation.
 
 **Brief, §14:** "A single request end-to-end through Ajv, neverthrow, Kysely and
 Express together. Each was probed alone... it is the seam most likely to be
@@ -345,8 +366,9 @@ three libraries misbehaves alone. Isolated reproductions of each half compile
 fine, which is exactly why probing them separately (as rev 3 did) could not find
 this.
 
-**The shape that does work** is to stop inferring the type from the schema and
-name it at the call site:
+**The fallback shape** — recommended by the original version of this finding, and
+still the retreat if a future TypeScript reintroduces the blowup — is to stop
+inferring and name the type at the call site:
 
 ```ts
 export function validator<T>(schema: object): (body: unknown) => Result<T, DomainError>
@@ -765,3 +787,175 @@ is perhaps twenty lines, it lands before any endpoint exists, and it converts th
 brief's weakest invariant into a compile-time property. Then §5's honest "cost,
 not correctness" defence gets a much stronger ending: the plugin was rejected
 *and* the invariant was mechanised anyway, by design rather than by tooling.
+
+---
+
+# Follow-up work: three additions
+
+F16–F18 record additions made after the initial nine probes, not defects found in
+the brief. They are here because each closes something the earlier findings left
+open.
+
+## F16 — the validation funnel left the asserted type and the schema unbound
+
+`isJsonValidRz` (formerly `validator`) existed to be the single place ingress
+payloads are checked and typed. It had the right shape in every respect but one:
+the signature was `validator<T>(schema: object)`, which left the asserted type and
+the validated schema **completely independent**. This compiled cleanly:
+
+```ts
+validator<CreateTransactionBody>(createUserSchema)
+```
+
+That is precisely the mismatched-assertion hazard a single funnel is supposed to
+make impossible, and it was live in two of the four route validators — which passed
+hand-written inline types (`{ email: string; password: string }`) against inline
+schemas. The same shape stated twice, with nothing keeping the statements in
+agreement.
+
+**Now closed, by deriving the type from the schema argument** (see the amendment at
+the head of F7 for the signature). There is no second position left to get wrong,
+so a mismatch is *unrepresentable* rather than something review or a linter has to
+catch. Proven with a `@ts-expect-error` that fails loudly if the binding is ever
+lost.
+
+**Three risks this creates, recorded because they are the price:**
+
+1. **A missing `as const` degrades the body to `unknown` silently.** No error
+   anywhere — just a validated body you cannot read. The `as const` in
+   `schemas.ts` moved from advisory to load-bearing. The first attempt at this
+   change hit exactly that on the two un-`as const`ed inline route schemas, which
+   is why they are now hoisted. `probe/03-validation/types.test.ts` asserts that no
+   validator returns `unknown`, and demonstrates that a widened schema really does
+   produce it, because the compiler will not tell you.
+2. **It depends on compiler internals at one pinned version** (TypeScript 6.0.3,
+   json-schema-to-ts 3.1.1, ajv 8.20.0). The fallback is written down in the module
+   and in F7.
+3. **The `CreateUserBody`/`CreateTransactionBody` aliases are no longer needed by
+   the validators.** Kept only where a signature names the type — `JwtPayload` in
+   `verifyToken`, for instance.
+
+**A tension this surfaced, worth knowing.** `as const satisfies JSONSchema` is the
+strong form of the guard, and it **rejects Ajv custom keywords** — `json-schema-to-ts`
+types a closed keyword set, so `currencyScale` fails the excess-property check.
+F6's 2dp mechanism and this type-level guard are therefore mutually exclusive on
+`createTransactionSchema`. The keyword wins: it is the only thing enforcing "at most
+two decimal places". `FromSchema` is unaffected, since it ignores keywords it does
+not know.
+
+**And a correction to my own earlier work.** The header comment in `schemas.ts`
+claimed `as const satisfies` "gives an error at the schema definition if it is not a
+valid JSON Schema". It satisfied `Record<string, unknown>`, which accepts any object
+at all and checks nothing. Corrected.
+
+## F17 — correlation ids and log-at-construction, and what the intersection cost
+
+Built as an addition to the existing error design rather than a replacement, which
+was the explicit requirement and the right one. `DomainError` is still a closed
+union of plain data with one constructor per member and a single renderer the
+compiler proves total. The seven constructors were already the chokepoint every
+error is born through, so they are the seam log-at-construction needs; an
+`AppError` class hierarchy would have traded compile-time totality for runtime
+totality and gained nothing.
+
+**What the intersection cost: nothing, and it added two guards.** The concern with
+`(A | B | ...) & { correlationId: string }` was that the intersection might stop
+distributing over the union and silently break both `switch (error.kind)` narrowing
+and the `never` exhaustiveness check. Verified it does not — and adding a member now
+produces **three** compile errors where there was one:
+
+```
+src/domain/errors.ts       TS2741  'BalanceCeilingExceeded' is missing in LEVELS
+src/http/render-error.ts   TS2322  not assignable to 'never'   (statusFor)
+src/http/render-error.ts   TS2322  not assignable to 'never'   (bodyFor)
+```
+
+The log-level map is the new guard: a member added without a level is a compile
+error rather than an `undefined` level at runtime.
+
+**Verified properties.** One id per request, not per error — the failure that would
+leave the collector nothing to stitch while still appearing to work. Exactly two log
+records per failed request: detail at construction, outcome at the renderer. Level
+follows `kind`, so the 4xx members sit at info/warn and `Unexpected` is the only
+`error`. Errors built outside a request read a named sentinel rather than an empty
+string.
+
+**The honest cost, recorded in the module.** Log-at-construction logs when an error
+is *created*, which is not the same as when one *occurs*. Code that builds an error
+and discards it produces a record for a non-event. Nothing does that today, but it
+is a real constraint on future code, and it is the price of the guarantee that no
+error can exist unlogged. Secondary cost: the constructors are no longer pure, so
+the log sink defaults to silent under test and a test that cares installs a
+capturing one.
+
+**The trust-policy departure, stated plainly because it looks like an omission.**
+There is no redaction. The full payload goes into the log record, keyed by
+correlation id — a submitted password included. What protects it is the **response
+boundary**, not obfuscation, and that boundary is enforced structurally: log-only
+data (`payload`, `schemaPaths`, `stack`) is a separate constructor parameter rather
+than fields on `DomainError`, so the renderer cannot render what it cannot see.
+Verified: `hunter2` appears in the log record and nowhere in the response, and every
+rendered `details` entry has exactly `{field, message, type}`.
+
+**One knock-on worth flagging.** Adding `correlationId` to the envelope breaks
+byte-equality of responses, which broke the "bad credentials are indistinguishable"
+test. That test now strips the id and separately asserts both responses carry one —
+otherwise it would have passed vacuously on two differing ids and quietly stopped
+testing the anti-enumeration property it is named for.
+
+## F18 — nothing checked what the service sends back
+
+The supplied OpenAPI defines response schemas as carefully as request ones, and
+until now nothing validated against them at runtime. Probe 08 compared responses to
+the spec in *tests*; this puts the check in the request path. The `handler` adapter
+is the natural home for the same reason it exists at all: handlers never touch
+`res`, so there is exactly one point every response body passes through.
+
+**The trap that makes this more than a copy of the ingress path.** Ajv's type checks
+are `typeof`-based, so validating the in-memory object checks something the client
+will never receive. Verified both halves:
+
+- A `Date` **satisfies** `type: 'object'` and **fails**
+  `type: 'string', format: 'date-time'` — while the client receives a string,
+  because `JSON.stringify` calls `toISOString`.
+- `{ a: 'present', b: undefined }` looks like it has `b` in memory and does not once
+  serialised, so an in-memory check would miss a missing required field.
+
+So `egressCheck` validates `JSON.parse(JSON.stringify(body))`. A failure is an
+`Unexpected` → 500 with the mismatch logged, not a 4xx: a response that does not
+satisfy its published schema is a bug in the service. The cost is a second
+serialisation per response, which is worth paying at this scale and worth gating to
+non-production at real traffic.
+
+**THE PAYOFF, and it is bigger than conformance.** `additionalProperties: false` on
+the response schemas turns §3's "no persistence entity and no password hash ever
+reaches a response body" from a rule the mapping functions are *trusted* to follow
+into a **checked** property. Verified: a response body carrying `password_hash`
+returns 500, the hash appears in the log record, and `$2b$10$` appears nowhere in
+the response. That is a third §3 invariant moved from the human checklist into the
+machine, alongside the two in F15.
+
+**This is where F13 stops being an observation and starts being a blocker.** Wiring
+the *supplied* response schemas in verbatim would make the service return **500 on
+legal behaviour** — two £10,000 deposits, and every real transaction id. So egress
+validation forced the two F13 corrections to be made rather than noted:
+
+- `balance` loses `maximum: 10000`. The floor is kept, and verified: a balance of
+  20000 passes, −1 still fails.
+- `TransactionResponse.id` becomes `^tan-[A-Za-z0-9]+$`.
+
+Both now belong in the "changes to the supplied specification" write-up as decisions
+with consequences, not as curiosities. F13 recommended exactly this; egress
+validation is what made it unavoidable.
+
+**The ingress side needed no work, and one hole is unreachable.**
+`additionalProperties: false` is applied at every level including the nested
+address, `__proto__` is caught as an unknown key without polluting the prototype,
+and `coerceTypes: false` stops `"1000"` passing where a number is required. The one
+hole Ajv structurally cannot see is **symbol-keyed properties** — it walks
+`Object.keys`, which skips them. That is unreachable for request bodies, because
+`express.json()` produces `JSON.parse` output, which cannot contain symbol keys or
+function values. Worth one line so nobody spends time on it, and worth remembering
+only when the funnel is pointed at an internally constructed object — which is
+exactly what egress validation does. Verified harmless there too: `JSON.stringify`
+drops symbol keys, so they cannot reach the client either.

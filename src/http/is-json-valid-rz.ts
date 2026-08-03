@@ -2,7 +2,7 @@ import { Ajv, type ErrorObject } from 'ajv'
 import type { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import addFormatsCjs from 'ajv-formats'
 import { err, ok, type Result } from 'neverthrow'
-import { validationFailed, type DomainError, type FieldError } from '../domain/errors.js'
+import { unexpected, validationFailed, type DomainError, type FieldError } from '../domain/errors.js'
 
 /**
  * `isJsonValidRz` -- the single validation funnel. Ajv behind a `Result`, with the
@@ -60,6 +60,43 @@ ajv.addKeyword({
     return Math.abs(data * factor - Math.round(data * factor)) <= 1e-6
   },
 })
+
+/**
+ * Egress validation: does what the service is about to send actually satisfy the
+ * schema the specification publishes for it?
+ *
+ * THE TRAP THAT MAKES THIS MORE THAN A COPY OF THE INGRESS PATH. Ajv's type checks
+ * are `typeof`-based, so a `Date` instance satisfies `type: 'object'` but fails
+ * `type: 'string', format: 'date-time'` — and a database row can carry `undefined`
+ * values and class instances that `JSON.stringify` silently drops or transforms.
+ * Validating the in-memory object therefore checks something the client will never
+ * receive. So this validates the **serialised** form, via a JSON round trip.
+ *
+ * That round trip is a real cost — every response is serialised twice. At this
+ * scale it is worth paying for the guarantee; at real traffic it would be gated to
+ * non-production, and that gate is the sort of thing worth deciding once rather
+ * than discovering.
+ *
+ * A FAILURE IS NOT A CLIENT ERROR. A response that does not satisfy its published
+ * schema is a bug in the service, so this yields `Unexpected` — a 500 with the
+ * mismatch in the log record — rather than anything in the 4xx range.
+ */
+export function egressCheck(schema: object): (body: unknown) => Result<void, DomainError> {
+  const compiled = ajv.compile(schema)
+  return (body: unknown): Result<void, DomainError> => {
+    // The JSON round trip is the point, not a defensive copy.
+    const serialised: unknown = JSON.parse(JSON.stringify(body))
+    if (compiled(serialised)) return ok(undefined)
+    const errors = compiled.errors ?? []
+    return err(
+      unexpected(new Error('response body does not satisfy its published schema'), {
+        details: errors.map(toFieldError),
+        schemaPaths: errors.map((e) => e.schemaPath),
+        payload: serialised,
+      }),
+    )
+  }
+}
 
 /** Ajv's instancePath is a JSON Pointer; the spec's `details[].field` is a name. */
 function toFieldError(e: ErrorObject): FieldError {

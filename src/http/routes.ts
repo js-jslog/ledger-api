@@ -13,6 +13,14 @@ import { errorMiddleware, notFoundMiddleware } from './error-middleware.js'
 import { created, handler, okBody } from './handler.js'
 import { createTransactionSchema, createUserSchema } from './schemas.js'
 import { isJsonValidRz } from './is-json-valid-rz.js'
+import {
+  bankAccountResponseSchema,
+  listBankAccountsResponseSchema,
+  listTransactionsResponseSchema,
+  loginResponseSchema,
+  transactionResponseSchema,
+  userResponseSchema,
+} from './response-schemas.js'
 
 /**
  * Ingress validators are compiled once, at module load, not per request. Under
@@ -108,7 +116,7 @@ export function buildApp(db: Kysely<Database>): Express {
   // The only unauthenticated write path.
   app.post(
     '/v1/users',
-    handler(async (req) => {
+    handler(userResponseSchema, async (req) => {
       const body = validateCreateUser(req.body)
       if (body.isErr()) return err(body.error)
       return (await users.create(body.value)).map(created)
@@ -117,7 +125,7 @@ export function buildApp(db: Kysely<Database>): Express {
 
   app.get(
     '/v1/users/:userId',
-    handler(async (req) => {
+    handler(userResponseSchema, async (req) => {
       const auth = authenticate(req)
       if (auth.isErr()) return err(auth.error)
       const userId = pathParam(req, 'userId', USER_ID)
@@ -131,7 +139,7 @@ export function buildApp(db: Kysely<Database>): Express {
   // deliverable of the exercise.
   app.post(
     '/v1/auth/login',
-    handler(async (req) => {
+    handler(loginResponseSchema, async (req) => {
       const body = validateLogin(req.body)
       if (body.isErr()) return err(body.error)
       return (await users.login(body.value.email, body.value.password)).map(okBody)
@@ -141,7 +149,7 @@ export function buildApp(db: Kysely<Database>): Express {
   // ---- accounts ----------------------------------------------------------
   app.post(
     '/v1/accounts',
-    handler(async (req) => {
+    handler(bankAccountResponseSchema, async (req) => {
       const auth = authenticate(req)
       if (auth.isErr()) return err(auth.error)
       const body = validateCreateAccount(req.body)
@@ -152,7 +160,7 @@ export function buildApp(db: Kysely<Database>): Express {
 
   app.get(
     '/v1/accounts',
-    handler(async (req) => {
+    handler(listBankAccountsResponseSchema, async (req) => {
       const auth = authenticate(req)
       if (auth.isErr()) return err(auth.error)
       return (await accounts.list(auth.value)).map(okBody)
@@ -161,7 +169,7 @@ export function buildApp(db: Kysely<Database>): Express {
 
   app.get(
     '/v1/accounts/:accountNumber',
-    handler(async (req) => {
+    handler(bankAccountResponseSchema, async (req) => {
       const auth = authenticate(req)
       if (auth.isErr()) return err(auth.error)
       const accountNumber = pathParam(req, 'accountNumber', ACCOUNT_NUMBER)
@@ -173,7 +181,7 @@ export function buildApp(db: Kysely<Database>): Express {
   // ---- transactions ------------------------------------------------------
   app.post(
     '/v1/accounts/:accountNumber/transactions',
-    handler(async (req) => {
+    handler(transactionResponseSchema, async (req) => {
       const auth = authenticate(req)
       if (auth.isErr()) return err(auth.error)
       const accountNumber = pathParam(req, 'accountNumber', ACCOUNT_NUMBER)
@@ -186,7 +194,7 @@ export function buildApp(db: Kysely<Database>): Express {
 
   app.get(
     '/v1/accounts/:accountNumber/transactions',
-    handler(async (req) => {
+    handler(listTransactionsResponseSchema, async (req) => {
       const auth = authenticate(req)
       if (auth.isErr()) return err(auth.error)
       const accountNumber = pathParam(req, 'accountNumber', ACCOUNT_NUMBER)
@@ -197,7 +205,7 @@ export function buildApp(db: Kysely<Database>): Express {
 
   app.get(
     '/v1/accounts/:accountNumber/transactions/:transactionId',
-    handler(async (req) => {
+    handler(transactionResponseSchema, async (req) => {
       const auth = authenticate(req)
       if (auth.isErr()) return err(auth.error)
       const accountNumber = pathParam(req, 'accountNumber', ACCOUNT_NUMBER)

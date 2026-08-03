@@ -1,6 +1,7 @@
 import type { Request, RequestHandler, Response } from 'express'
-import type { Result } from 'neverthrow'
+import { ok, type Result } from 'neverthrow'
 import type { DomainError } from '../domain/errors.js'
+import { egressCheck } from './is-json-valid-rz.js'
 import { renderError } from './render-error.js'
 
 /** What a handler returns on success: a status and a body, never a bare value. */
@@ -35,22 +36,36 @@ export const noContent = (): Success<null> => ({ status: 204, body: null })
  * downloads it would not be.
  */
 export function handler<T>(
+  responseSchema: object,
   fn: (req: Request) => Promise<Result<Success<T>, DomainError>>,
 ): RequestHandler {
+  // Compiled once, at route-registration time, like the ingress validators.
+  const checkEgress = egressCheck(responseSchema)
+
   return (req, res, next) => {
     // The promise is deliberately handed to Express rather than awaited here:
     // Express 5 propagates a rejection to the error middleware, which is the
     // §8 "infrastructure failures" source. Probe 02 verified that path.
     fn(req)
       .then((result) => {
-        result.match(
-          (success) => {
-            send(res, success)
-          },
-          (error) => {
-            renderError(res, error)
-          },
-        )
+        result
+          // Egress validation belongs here for the same reason the adapter exists:
+          // handlers never touch `res`, so this is the single point every response
+          // body passes through. Nothing checked what the service sends back before
+          // this, even though the supplied spec defines response schemas as
+          // carefully as request ones.
+          .andThen((success) =>
+            // A 204 has no body to check.
+            success.status === 204 ? ok(success) : checkEgress(success.body).map(() => success),
+          )
+          .match(
+            (success) => {
+              send(res, success)
+            },
+            (error) => {
+              renderError(res, error)
+            },
+          )
       })
       .catch(next)
   }
