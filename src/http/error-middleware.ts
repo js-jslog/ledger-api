@@ -1,5 +1,5 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express'
-import { unexpected, validationFailed, type DomainError } from '../domain/errors.js'
+import { notFound, unexpected, validationFailed, type DomainError } from '../domain/errors.js'
 import { renderError } from './render-error.js'
 
 /** body-parser's marker for a body it could not parse. */
@@ -49,5 +49,8 @@ export const errorMiddleware: ErrorRequestHandler = (err, _req, res, _next) => {
  * being registered after every route.
  */
 export const notFoundMiddleware: RequestHandler = (_req, res) => {
-  res.status(404).json({ message: 'Resource was not found' })
+  // Goes through the constructor and the one renderer rather than hand-rolling an
+  // envelope. Hand-rolling was fine before; now it would be the single response in
+  // the service without a correlation id, and the single failure with no log record.
+  renderError(res, notFound('Resource'))
 }

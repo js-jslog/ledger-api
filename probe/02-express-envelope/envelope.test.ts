@@ -84,7 +84,10 @@ describe('beyond the five criteria', () => {
     for (const path of ['/throws-sync', '/throws-async']) {
       const res = await request(app).get(path)
       expect(res.status, path).toBe(500)
-      expect(res.body, path).toEqual({ message: 'An unexpected error occurred' })
+      expect(res.body.message, path).toBe('An unexpected error occurred')
+      // No stack, no cause -- those went to the log record, not the response.
+      expect(res.body, path).not.toHaveProperty('cause')
+      expect(res.body, path).not.toHaveProperty('stack')
       expect(res.text, path).not.toContain('at ') // no stack leak
     }
   })
@@ -94,7 +97,7 @@ describe('beyond the five criteria', () => {
     // the mechanism the JWT middleware depends on for its 401s.
     const res = await request(buildProbeApp()).get('/throws-in-async-middleware')
     expect(res.status).toBe(500)
-    expect(res.body).toEqual({ message: 'An unexpected error occurred' })
+    expect(res.body.message).toBe('An unexpected error occurred')
   })
 
   test('a throw after the response is sent does not corrupt it', async () => {
@@ -106,7 +109,7 @@ describe('beyond the five criteria', () => {
   test('an unmatched route gets the JSON 404 envelope', async () => {
     const res = await request(buildProbeApp()).get('/no-such-route')
     expect(res.status).toBe(404)
-    expect(res.body).toEqual({ message: 'Resource was not found' })
+    expect(res.body.message).toMatch(/not found/i)
   })
 
   test('TRAP: a three-argument error handler is silently not an error handler', async () => {

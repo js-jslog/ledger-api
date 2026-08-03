@@ -116,8 +116,20 @@ describe('signup, login, and the keystone ownership check', () => {
       .send({ email: 'nobody@example.com', password: 'not-the-password' })
       .expect(401)
 
-    // No user-enumeration oracle: identical bodies.
-    expect(wrongPassword.body).toEqual(unknownEmail.body)
+    // No user-enumeration oracle. The correlation id is minted per request so it
+    // necessarily differs -- compare everything else. Stripping it is deliberate
+    // rather than incidental: if this test compared whole bodies it would pass
+    // vacuously on two differing ids and stop testing the property it names.
+    const withoutCorrelationId = (body: Record<string, unknown>): Record<string, unknown> => {
+      const { correlationId: _id, ...rest } = body
+      return rest
+    }
+    expect(withoutCorrelationId(wrongPassword.body)).toEqual(
+      withoutCorrelationId(unknownEmail.body),
+    )
+    // ...and both DO carry one, so the strip above is not hiding an absence.
+    expect(wrongPassword.body.correlationId).toEqual(expect.any(String))
+    expect(unknownEmail.body.correlationId).not.toBe(wrongPassword.body.correlationId)
   })
 
   test('THE KEYSTONE: own user 200, other user 403, absent user 404', async () => {
@@ -347,8 +359,11 @@ describe('the two error sources meet in one renderer (§8)', () => {
       .send('{"broken')
       .expect(400)
 
-    expect(Object.keys(domain.body)).toEqual(['message'])
-    expect(Object.keys(infra.body).sort()).toEqual(['details', 'message'])
+    expect(Object.keys(domain.body).sort()).toEqual(['correlationId', 'message'])
+    expect(Object.keys(infra.body).sort()).toEqual(['correlationId', 'details', 'message'])
+    // The id also comes back on a header, so a client can log it without parsing
+    // the body -- and so it is available on responses that have no body at all.
+    expect(domain.headers['x-correlation-id']).toBe(domain.body.correlationId)
     // Neither leaks a stack trace.
     expect(domain.text).not.toContain('at ')
     expect(infra.text).not.toContain('at ')

@@ -8,6 +8,7 @@ import { validationFailed, type DomainError } from '../domain/errors.js'
 import { makeAccountService } from '../service/accounts.js'
 import { makeTransactionService } from '../service/transactions.js'
 import { makeUserService } from '../service/users.js'
+import { correlationMiddleware } from '../observability/correlation.js'
 import { errorMiddleware, notFoundMiddleware } from './error-middleware.js'
 import { created, handler, okBody } from './handler.js'
 import { createTransactionSchema, createUserSchema } from './schemas.js'
@@ -94,6 +95,9 @@ export function buildApp(db: Kysely<Database>): Express {
   const transactions = makeTransactionService(db)
 
   const app = express()
+  // First, before anything that can fail: a handler running outside the store
+  // reads NO_REQUEST_CONTEXT and its records correlate with nothing.
+  app.use(correlationMiddleware)
   app.use(express.json({ limit: '16kb' }))
 
   app.get('/health', (_req, res) => {

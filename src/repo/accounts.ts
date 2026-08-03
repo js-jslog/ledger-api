@@ -1,6 +1,6 @@
 import { err, ok, type Result } from 'neverthrow'
 import type { Kysely } from 'kysely'
-import { insufficientFunds, notFound, type DomainError } from '../domain/errors.js'
+import { forbidden, insufficientFunds, notFound, type DomainError } from '../domain/errors.js'
 import type { Database } from '../db/schema.js'
 
 export type PostedTransaction = {
@@ -133,7 +133,10 @@ export function makeAccountRepo(db: Kysely<Database>, newTransactionId: () => st
 
       if (row === undefined) return err(notFound('Bank account'))
       // 403 rather than 404, per the supplied specification (§3).
-      if (row.user_id !== userId) return err({ kind: 'Forbidden' })
+      // Must go through the constructor now: the correlation-id intersection makes
+      // an inline literal unassignable, which is a welcome side effect -- an
+      // error built by hand would also be an error that never logged itself.
+      if (row.user_id !== userId) return err(forbidden({ accountNumber, userId }))
       return ok({ accountNumber: row.account_number })
     },
   }

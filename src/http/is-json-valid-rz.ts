@@ -120,6 +120,17 @@ export function isJsonValidRz<S extends object>(
       )
     }
     if (compiled(body)) return ok(body as T)
-    return err(validationFailed((compiled.errors ?? []).map(toFieldError)))
+    const errors = compiled.errors ?? []
+    return err(
+      validationFailed(errors.map(toFieldError), {
+        // The full payload goes to the log, keyed by correlation id. What protects
+        // it is the response boundary, not redaction: renderError sends only the
+        // spec's {field, message, type} details, never this and never schemaPath.
+        payload: body,
+        // schemaPath is the more useful of Ajv's two paths for debugging, and the
+        // one that must not be rendered -- it exposes schema structure.
+        schemaPaths: errors.map((e) => e.schemaPath),
+      }),
+    )
   }
 }
