@@ -499,8 +499,16 @@ built inside the budget; sized rather than hand-waved.
 
 ## R18 — The reviewer needs pnpm, and the build-script allowlist must be committed
 
-**Chosen.** pnpm as the package manager, with `packageManager: "pnpm@11.x"` in
-`package.json` and `allowBuilds` in `pnpm-workspace.yaml`, both committed.
+> **Corrected during the build, at slice 0a.** The trigger below overstated the
+> hazard for this dependency set. Measurement and reasoning in
+> `docs/divergences.md`; the original claim is struck through rather than deleted,
+> because it was load-bearing for the ordering of step 0.
+
+**Chosen.** pnpm as the package manager, with `packageManager: "pnpm@11.18.0"` in
+`package.json` — an exact version, not the `11.x` range originally specified, because
+corepack resolves a range against the registry per invocation and two machines can
+then land on different pnpm 11 minors — and `allowBuilds` in `pnpm-workspace.yaml`,
+both committed.
 
 **What it costs.** A reviewer whose machine has no `pnpm` needs `corepack enable`
 or a global install — one more prerequisite than `npm` would have been, and
@@ -509,10 +517,22 @@ real in exchange: pnpm's symlinked layout makes an undeclared transitive
 dependency fail rather than resolve silently through flat hoisting.
 
 **How you would trigger it.** Clone on a machine without pnpm and run the README's
-install command. More sharply: omit `pnpm-workspace.yaml` from the commit and
-pnpm 11's build-script gate fails *every* script invocation, not just install —
-`test`, `typecheck` and `lint` all die identically, and the presenting symptom is
-"the toolchain is broken" rather than "a postinstall script was skipped".
+install command.
+
+~~More sharply: omit `pnpm-workspace.yaml` from the commit and pnpm 11's build-script
+gate fails *every* script invocation, not just install.~~ **Not true as built.** No
+package in this tree declares an install script — vitest 4 transforms via rolldown
+rather than esbuild, and both dependencies that might have needed native compilation
+are chosen to avoid it. So `allowBuilds` is empty and omitting the file would cost the
+reviewer nothing today.
+
+The gate itself is real, and was verified here on pnpm 11.18.0 with a throwaway
+dependency carrying a `postinstall` script: unlisted, it failed `test`, `typecheck`
+and `lint` identically inside `runDepsStatusCheck`, with nothing in the trace naming
+the cause. So the trigger is **adding a dependency with a build script**, not omitting
+the file — and the presenting symptom really is "the toolchain is broken" rather than
+"a postinstall script was skipped". The file is committed so that the day this
+happens, the fix is one line in a place that already explains itself.
 
 **What closes it.** Both prerequisites are in the README, and the cold-start
 rehearsal before submission exists specifically to prove the reviewer's path
