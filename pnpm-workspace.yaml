@@ -3,10 +3,14 @@
 # the only place the setting below can live.
 #
 # `allowBuilds` is the postinstall-script allowlist, and it is EMPTY BY
-# MEASUREMENT rather than by omission. Verified at this lockfile: no package in the
-# 139-package tree declares a `preinstall`, `install` or `postinstall` script, so
-# there is nothing to allowlist. vitest 4 transforms via rolldown rather than
-# esbuild, which is the dependency this entry is usually needed for.
+# MEASUREMENT rather than by omission. No package in the tree declares a
+# `preinstall`, `install` or `postinstall` script, so there is nothing to allowlist.
+# vitest 4 transforms via rolldown rather than esbuild, which is the dependency this
+# entry is usually needed for.
+#
+# Measure it against a tree rebuilt from the lockfile, not the one in place:
+# node_modules/.pnpm retains directories for packages that have been removed, so a
+# scan of it reports dependencies the project no longer has.
 #
 # Keeping the key present and empty is deliberate: it says the question was asked.
 # Re-check it whenever a dependency is added, because that is the only moment the
