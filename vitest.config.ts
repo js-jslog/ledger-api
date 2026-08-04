@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'test/**/*.test.ts', 'eslint-rules/**/*.test.mjs'],
 
     // vitest defaults to running test *files* in parallel, verified rather than
     // assumed: `test/toolchain` is a pair of files that fail if they overlap, and

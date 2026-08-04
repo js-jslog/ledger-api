@@ -54,6 +54,7 @@ absent by decision, and the reasoning is entry R2.
 | R25 | Log record keys can be attacker-controlled via the JWT payload path | Low | Harmless with a JSON sink |
 | R26 | Validators compile at module load, not ahead of time | Low here, blocking elsewhere | Certain — a capability not present |
 | R27 | The commit gate is local, opt-in per clone, and checks the working tree | Low | Certain on a fresh clone |
+| R28 | The Result naming rule sees bindings, not every position a `Result` can occupy | Low | On the first `Result`-typed class property |
 
 ---
 
@@ -819,3 +820,52 @@ substitute. Checking staged content locally would mean stashing the remainder,
 which buys a case this workflow does not produce (slices are committed whole) at
 the price of a way to lose work. The README must carry the `core.hooksPath` line in
 its prerequisites, or the gate silently does not exist for anyone else.
+
+---
+
+## R28 — The Result naming rule sees bindings, not every position a `Result` can occupy
+
+**Chosen.** `local/result-binding-must-have-rz-suffix` enforces `docs/conventions.md`
+mechanically, and does it type-aware rather than by name heuristics: the binding's
+resolved type is the whole classification, so factories, combinator chains and
+annotations are all handled without a producer list to maintain.
+
+**What it costs.** Three gaps, each deliberate and each an argument for review rather
+than a hole in the rule's logic.
+
+- **The producer half of the convention is unenforceable this way.** `getAppIdRz` — a
+  function returning a `Result`, spelled without the `_` — passes. The underscore is a
+  claim about a function's *return* type; the rule reads the type of the binding. A
+  second rule could check the return type of every declaration, and would have to decide
+  whether an unbound arrow passed inline counts. Not attempted.
+- **Only `let`/`const` bindings and function parameters are visited.** Class properties
+  and object literal members are not. Nothing in the codebase has a `Result`-typed
+  property yet; services and repositories will, and that is when this gap becomes live
+  rather than theoretical.
+- **Destructuring is out of scope**, because attribution to a single `Result` is
+  unclear — `const { a } = someRz` does not obviously make `a` anything.
+
+**A second cost, of a different kind: the rule itself is not typechecked.**
+`eslint.config.mjs` has to import it, and an `eslint.config.ts` requires `jiti` — the
+dependency that file's own comment declines. So the rule is `.mjs`, outside `tsc`'s
+reach, and `pnpm lint` covers it syntactically only. That is the reason its 22 test cases
+are the thorough half of the work rather than a formality: they are the only thing
+standing where the compiler does not, which is the same argument as
+`validator-for.type-assertions.ts`.
+
+**How you would trigger it.** Add a service with a `Result`-typed private field named
+without a suffix. It compiles, lints clean, and the convention is silently not applied
+to it.
+
+**What closes it.** Visiting `PropertyDefinition` and `Property` nodes as well — a small
+extension to the existing `check` function rather than a new rule, since the
+classification logic is already position-independent. Worth doing when the first
+`Result`-typed property exists, and not before, so the extension is written against a
+real case.
+
+**Note that it fails loudly rather than silently.** The rule throws if handed a file with
+no type information instead of degrading to no-op. That is why it is registered against
+`**/*.ts` specifically: a global registration would abort on `eslint.config.mjs` itself.
+If a future glob is added without `projectService` coverage, `pnpm lint` breaks rather
+than quietly stopping enforcement — the correct direction for a rule whose whole value is
+that it is running.

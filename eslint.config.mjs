@@ -4,6 +4,8 @@
 import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 
+import resultBindingMustHaveRzSuffix from './eslint-rules/result-binding-must-have-rz-suffix.mjs'
+
 export default tseslint.config(
   { ignores: ['node_modules/**', 'dist/**', 'coverage/**'] },
 
@@ -43,6 +45,16 @@ export default tseslint.config(
           caughtErrorsIgnorePattern: '^_',
         },
       ],
+    },
+  },
+
+  {
+    files: ['**/*.ts'],
+    plugins: {
+      local: { rules: { 'result-binding-must-have-rz-suffix': resultBindingMustHaveRzSuffix } },
+    },
+    rules: {
+      'local/result-binding-must-have-rz-suffix': 'error',
     },
   },
 
