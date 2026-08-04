@@ -484,6 +484,20 @@ that is created, never inspected and never returned is not caught by anything.
 subset is covered by `@typescript-eslint/no-floating-promises`; the synchronous
 subset is covered only by review.
 
+**What partly mitigates it, and precisely how far.** The `Rz`/`RzA` naming convention
+(`docs/conventions.md`) puts the `Result`-ness of every binding in its name, so a
+created-and-dropped `signupRz` is a *legible* unhandled failure where a dropped `result`
+is not. Since `local/result-binding-must-have-rz-suffix` was added, that naming is
+mechanically enforced rather than reviewed — but **the enforcement is of the naming, not
+of the handling, and this risk is untouched by it.** The rule visits bindings and
+parameters; a `Result` that is created and discarded has no binding for it to visit. It
+makes the reviewer this risk depends on more effective. It does not stand in for them.
+
+The bound-and-never-read case is in fact already covered, and not by either of the above:
+`@typescript-eslint/no-unused-vars` reports it. **The uncovered case is narrower than this
+entry's title suggests** — it is a `Result` returned by a call in statement position and
+never bound at all, where no rule currently looks.
+
 **How you would trigger it.** Call something returning a `Result` in a service
 method and ignore the return value. It compiles and lints clean.
 
@@ -496,6 +510,13 @@ rule is the better answer: perhaps forty lines against the type checker, it
 understands narrowing, and the type-aware lint infrastructure it needs already
 exists here — which is the reason `typescript` is pinned to the 6 line (R14). Not
 built inside the budget; sized rather than hand-waved.
+
+**That estimate is now better than a guess.** `local/result-binding-must-have-rz-suffix`
+is a working type-aware custom rule in this repository, so the harness question — can a
+local rule read the type checker here, and can it be tested — is answered rather than
+assumed. What remains for *this* rule is the part that was always the real work:
+deciding what counts as handling, given that `isOk`/`isErr` narrowing must count and
+`eslint-plugin-neverthrow` did not recognise it.
 
 ---
 
