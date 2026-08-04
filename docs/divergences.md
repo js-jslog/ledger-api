@@ -177,3 +177,84 @@ as least durable, checked at its point of use rather than adopted on trust. Nest
 `additionalProperties: false`, `__proto__` rejected as an unknown key without
 prototype pollution, and `coerceTypes: false` refusing `"1000"` for a number all
 behave as described, and are now asserted by tests rather than believed.
+
+---
+
+## Slice 0c — specification changes
+
+### Claim under test
+
+> The design's inventory of defects in the supplied document: three forced, two
+> corrective, two promoted unsatisfiability findings, and a set of observations.
+
+**Negative for the third slice running.** The inventory is substantially right and two
+of its counts are wrong. Both were checked by parsing the document rather than reading
+it, which is the only reason either was found.
+
+**The `403` note is wrong in both directions.** It reads "the seven copy-pasted 403
+descriptions", filed as cosmetic. There are **ten** `403` responses, and the problem is
+not duplication: **five of them describe a different operation than the one they sit
+on.** `POST /v1/accounts` and all three `/v1/users/{userId}` operations say the user is
+"not allowed to access the transaction", and `POST .../transactions` — a create — says
+"not allowed to delete the bank account details". Only one of the five sites mentioning
+a transaction concerns one. Still not edited, and still cosmetic in the sense that it
+changes no behaviour, but "copy-pasted onto similar operations" and "names the wrong
+operation entirely" are different observations, and the second is the one worth being
+able to show.
+
+**`CreateTransactionRequest.amount` declares `maximum: 10000.00`, not `maximum: 10000`.**
+The design states the two ceilings in different notations, which reads as though the
+mismatch between them is part of the defect. It is not — the two values are numerically
+identical, and the unsatisfiability comes entirely from *two* legal deposits summing past
+a ceiling that applies to the balance. The argument is unaffected; the transcription was
+wrong and R9 repeated it. Corrected in both.
+
+**Everything else in the inventory held**, and was verified rather than accepted:
+
+| Claim | Verified how | Result |
+|---|---|---|
+| Six `format:` keywords hold regexes, confined to `components.schemas` | Enumerated; every component schema then compiled under `strict: true` | Exactly six, all six named correctly |
+| `strict: false` is the wrong workaround | Compiled the same schema both ways | `strict: false` validates `"GARBAGE"` as an account number |
+| `^tan-[A-Za-z0-9]$` rejects the document's own example | Regex, and the character class enumerated | Rejects `tan-123abc`; admits exactly **62** ids |
+| `POST /v1/users` is the only `400` with no body schema | Surveyed all eleven | Confirmed, one of eleven |
+| `accountId` appears zero times in the specification | Parsed | Zero. The mismatch is with the scenarios, not internal |
+
+### Departures from the design in 0c
+
+- **`password` on `CreateUserRequest` only, though the design calls for both user request
+  schemas.** On create it repairs a defect; on update it repairs nothing and publishes a
+  design instead. The design was reasoning about ingress rejection, and its instruction
+  generalised further than its argument did. The reasoning and the recorded omission are
+  in `docs/spec-changes.md`.
+- **The login endpoint is reclassified from "forced" to instructed**, which changes whose
+  claim it is rather than what gets built. The design derives the endpoint from the
+  specification's own silence. The accompanying requirements ask for it outright, and ask
+  for the specification to be updated with its details — so it is an instruction carried
+  out, not a defect found, and only the second would be a finding of mine.
+
+  Worth noting *why* the design got this wrong, because the mechanism will recur: it
+  reasons almost entirely from the specification, and this requirement lives in the other
+  supplied document. Anything stated only in the requirements is in the design's blind
+  spot by construction.
+
+### Diff against the reference
+
+**There is nothing to diff.** The reference branch carries no `openapi.yaml` at all — it
+never edited the supplied document. What it has instead is
+`probe/08-spec-conformance/`, which the consultation protocol marks read-freely, so it
+was read directly rather than after an attempt.
+
+| Difference | Verdict |
+|---|---|
+| The reference transcribes the supplied schemas into TypeScript *deliberately unfixed*, applying only forced item 3 so that Ajv can load them at all | **Neither better nor worse — a different purpose.** Its job was to demonstrate that the defects bite; this build's job is to ship a corrected document. Its file comment says so explicitly: "the point of this probe is to check our responses against the spec as written, not against a corrected spec." |
+| The reference proves the balance ceiling **end to end** — two legal deposits through the real API, then validating the resulting `200` body against the supplied schema and asserting it fails on `keyword: 'maximum'` | **The reference is better, and this build cannot match it yet.** Verified here only at the schema level: with `maximum` removed, a `20000.00` balance validates. That establishes the fix, not the failure it fixes. Carried forward — the two-deposit test is worth reproducing once accounts and transactions exist. |
+| The reference has no `additionalProperties` anywhere in its transcribed schemas | **Deliberate departure, and it is an addition to the supplied document rather than a disagreement with the reference.** Applied to response schemas only; the asymmetry and its cost are argued in `docs/spec-changes.md` and recorded as R30. |
+| The reference refuses a £0 transaction with `exclusiveMinimum: 0` and a `400`, and its own test records that as a deviation | **Deliberate departure, per the design, which departs from the probe here.** Implemented as written: £0 is permitted. The probe's behaviour is defensible but returns a status the document does not sanction, and conformance is the assessed property. R8. |
+| The reference's transcription omits `format: double` on the money fields | **Equivalent.** It is a registered format that constrains nothing; dropping it changes no validation outcome. |
+
+### One thing to carry forward
+
+The reference's conformance test is the strongest artefact in this area and it is
+currently unreproducible here, because it needs a running service. It is not a test to
+write from scratch at slice 8 — it is the natural closing test of slice 6, and the two
+`F13` findings are only *demonstrated* rather than *asserted* until it exists.

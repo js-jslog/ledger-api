@@ -56,6 +56,7 @@ absent by decision, and the reasoning is entry R2.
 | R27 | The commit gate is local, opt-in per clone, and checks the working tree | Low | Certain on a fresh clone |
 | R28 | The Result naming rule sees bindings, not every position a `Result` can occupy | Low | On the first `Result`-typed class property |
 | R29 | `allErrors: true` makes validation effort scale with how invalid a body is | Low | Bounded only by an unstated body-size default |
+| R30 | The published request schemas describe something looser than the service enforces | Medium | Certain for any client generated from the specification |
 
 ---
 
@@ -246,11 +247,16 @@ entry exists to say so.
 
 ## R9 — Balances may exceed the ceiling the specification publishes
 
-**Chosen.** `BankAccountResponse.balance` declares `maximum: 10000.00` in the
-supplied specification while `CreateTransactionRequest.amount` declares
-`maximum: 10000`. Two legal deposits therefore produce a balance the response
-schema cannot represent. The `maximum` was removed from the response schema and
-the balance is allowed to grow.
+**Chosen.** `BankAccountResponse.balance` and `CreateTransactionRequest.amount` both
+declare `maximum: 10000.00` in the supplied specification. Two legal deposits therefore
+produce a balance the response schema cannot represent. The `maximum` was removed from
+the response schema and the balance is allowed to grow.
+
+> **Corrected during the build, at slice 0c.** This entry previously gave the second
+> ceiling as `maximum: 10000`, which reads as though the two values differ and that the
+> difference is the defect. They are numerically identical; the unsatisfiability comes
+> from two legal deposits summing past a ceiling that applies to their total. Verified by
+> parsing the document. The conclusion is unchanged.
 
 **What it costs.** A deviation from the supplied specification, recorded in
 `docs/spec-changes.md`.
@@ -981,3 +987,44 @@ this scale.
 **Not to be confused with R26.** That entry is about Ajv generating code from
 *schemas*; this one is about Ajv doing unbounded work on *data*. Different mechanism,
 different fix, and precompilation does nothing for this one.
+
+---
+
+## R30 — The published request schemas describe something looser than the service enforces
+
+**Chosen.** `additionalProperties: false` was added to the published *response* schemas
+and deliberately not to the published *request* schemas, although every ingress in this
+service rejects unknown properties. The word appears nowhere in the supplied
+specification — verified by parsing it — so both halves would have been additions, and
+only one was taken.
+
+The division is by who bears the consequence. Closing a response schema documents a
+guarantee this service makes, and costs a client nothing. Closing a request schema
+imposes a new restriction on callers: a body legal under the document as published starts
+returning `400`.
+
+**What it costs.** The specification under-describes the endpoint. A reader of
+`CreateUserRequest` cannot tell that `{ …, "isAdmin": true }` will be rejected, because
+nothing in the published schema says so. That is exactly the criticism this project makes
+of publishing a schema looser than the behaviour behind it — the same objection R11
+raises about omitting the two-decimal-place keyword — so it is inconsistent to record
+that one and not this.
+
+**How you would trigger it.** Generate a client from `openapi.yaml`, send a request body
+carrying any property the schema does not name, and receive a `400` the generated client
+had no way to anticipate. Round-tripping is worse than a plain mistake here: a client
+generated from the document produces requests the document permits and the service
+refuses.
+
+**What closes it.** Add `additionalProperties: false` to `CreateUserRequest`,
+`UpdateUserRequest`, `CreateBankAccountRequest`, `UpdateBankAccountRequest`,
+`CreateTransactionRequest` and `LoginRequest`, including the nested `address` objects,
+and record it in `docs/spec-changes.md` as a contract tightening rather than a
+correction. Ten minutes of editing.
+
+**Why it was not simply taken.** Tightening a contract on someone else's published
+document is a different act from fixing a defect in it. Every other edit in
+`docs/spec-changes.md` either unblocks the build, repairs something demonstrably broken,
+or documents a guarantee. This one would narrow what callers may send, and it is the only
+edit on the list that could break a conforming client. That is a decision to raise rather
+than to make silently — which is the whole reason this entry exists instead of the edit.
