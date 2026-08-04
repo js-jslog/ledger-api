@@ -431,7 +431,7 @@ anywhere with a non-default configuration.
 ## R16 — Nothing forces a new boundary to use the validation funnel
 
 **Chosen.** All ingress and egress validation passes through one module,
-`isJsonValidRz`, which derives the validated type from the schema argument so there
+`validatorFor`, which derives the validated type from the schema argument so there
 is no second position in which to state the shape differently.
 
 **What it costs.** The funnel protects the calls that happen. It cannot protect a
@@ -567,7 +567,7 @@ rather than left to whatever the reviewer has.
 
 ## R19 — A schema missing `as const` degrades its validated type to `unknown` silently
 
-**Chosen.** `isJsonValidRz<S extends object>` infers the validated body type from
+**Chosen.** `validatorFor<S extends object>` infers the validated body type from
 the schema argument, so there is no explicit type parameter anywhere and a
 mismatched assertion is unrepresentable.
 
@@ -607,7 +607,7 @@ reasons: type-aware lint rules (R14) and this inference.
 the validation module, this is what happened.
 
 **What closes it.** The fallback is written down rather than improvised: retreat to
-`isJsonValidRz<FromSchema<typeof createUserSchema>>(createUserSchema)`, which also
+`validatorFor<FromSchema<typeof createUserSchema>>(createUserSchema)`, which also
 compiles cleanly. It does not make a mismatched assertion a type error, so it is a
 genuine regression in guarantee — but it keeps the type textually adjacent to the
 schema it derives from, which is most of the legibility benefit. Knowing which
@@ -776,11 +776,41 @@ and therefore unbreakable. Neither design dominates: one buys deployability with
 convention, the other buys a compile-time guarantee by giving up deployability it does
 not currently need.
 
-**Note on the name.** `isJsonValidRz` reads like a predicate and behaves like a
-factory here. That mismatch is inherited: the name belongs to a reference
-implementation where validators are precompiled, so a direct predicate-shaped call is
-the natural form. Kept deliberately, so the code and the design conversation use the
-same word.
+**Note on the name, and a decision reversed.** The helper was called `isJsonValidRz`,
+which read like a predicate while behaving like a factory. The mismatch was inherited
+rather than chosen: the name belongs to a reference implementation where validators are
+precompiled, so a direct predicate-shaped call is the natural form *there*. It was kept
+deliberately, so that the code and the design conversation used the same word.
+
+**That has been withdrawn; it is now `validatorFor`.** The shared vocabulary was worth
+less than it cost, and there were two defects rather than the one originally noticed.
+
+The recognised one: a reader meeting a function named `is…` reasonably expects a boolean
+or a type predicate and gets neither — it returns a function.
+
+The more serious one, visible only once the `Rz` convention was written down in
+`docs/conventions.md`: a bare `Rz` asserts that the thing **is** a `Result`, and a
+function that merely returns one takes an underscore (`get_appIdRz`). This helper is two
+steps from a `Result` — it returns a function, and only that function returns one — so
+the suffix was wrong by two levels of indirection rather than being harmless decoration.
+It would have been wrong in the reference implementation too, where the correct spelling
+for a direct call is `isJsonValid_Rz`. `validatorFor(schema)` carries no marker because
+no marker applies to a factory; call sites read
+
+```ts
+const validate_signupRz = validatorFor(signupSchema)   // returns a Result
+const signupRz = validate_signupRz(req.body)           // IS a Result
+```
+
+**What this costs, stated because it is the argument that was being made.** The design
+conversation and the code no longer share a word, so anyone reading both has to carry
+the mapping. That is a real cost and it is why the old name survived this long; it is
+paid once by a reader of this note, whereas the predicate/factory mismatch was paid by
+every reader of every call site. Note also that if this risk is ever closed —
+ahead-of-time compilation, a direct call taking a compiled `ValidateFunction` — a
+predicate name becomes correct again — as `isJsonValid_Rz`, not the original spelling —
+and the rename back should ride along with the signature change rather than being argued
+separately.
 
 ---
 

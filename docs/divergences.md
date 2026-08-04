@@ -102,6 +102,7 @@ unread — it belongs to slice 0d.
 | Reference omits `js.configs.recommended` | **Deliberate.** Added here; strictly more checking for no cost. |
 | Reference `include: ["src","migrations","probe","*.ts"]` vs `["src","test","migrations","vitest.config.ts"]` | **Equivalent.** Tests live in `test/` here rather than `probe/`, and the root glob is narrowed to the one file that exists. |
 | Reference sets `esModuleInterop: true` | **Equivalent.** `module: nodenext` already implies it, and the design records that it does *not* solve the `ajv-formats` interop problem anyway. |
+| Neither the reference nor its catalogue has a local ESLint rule; this build adds `eslint-rules/result-binding-must-have-rz-suffix.mjs` | **Deliberate addition, and it partly answers the reference's own open question.** The reference's R17 sizes a custom type-aware rule at "perhaps forty lines" and does not build one. This is not that rule — it enforces the `Rz` naming convention, not Result *handling* — but it proves the harness the estimate depended on: a local rule can read the type checker here and can be unit-tested. Cost recorded in R28: `eslint.config.mjs` must import it, so it is `.mjs` and outside `tsc`. |
 | Reference has `dev: "tsx watch src/main.ts"` and a `tsx` dependency | **Outstanding, deferred to 0e.** Node 24 runs TypeScript natively, so `tsx` may be a dependency this build does not need — and every direct dependency has to be defensible in the README table. Decide when the entrypoint exists. |
 
 ### One thing to carry forward
@@ -111,3 +112,68 @@ types `res.body` as `any` and asserting on a response body is therefore "unsafe"
 those rules. Not needed yet — `supertest` arrives with the first endpoint. Noted so it
 is a known cost at slice 1 rather than a surprise, and so the exemption stays scoped to
 test files instead of being loosened globally.
+
+---
+
+## Slice 0b — the validation funnel
+
+### Claim under test
+
+> The type parameter must be constrained to `object` rather than to `JSONSchema`,
+> because an unresolved `FromSchema<S>` distributed across the `JSONSchema` union,
+> **multiplied by the seven-member error union**, inside `Result`, exceeds what the
+> compiler can represent.
+
+**The workaround is necessary. The explanation of why is wrong**, and it is wrong in
+the direction that matters — it names a term that turns out to be irrelevant.
+
+Six variants were compiled at the project's own TypeScript and library versions,
+changing one thing at a time:
+
+| Variant | Result |
+|---|---|
+| `S extends JSONSchema`, `Result<…, SevenMemberUnion>`, body builds `ok`/`err` | **TS2589 + TS2590** |
+| `S extends JSONSchema`, `Result<…, OneMemberUnion>`, body builds `ok`/`err` | **TS2589 + TS2590** |
+| `S extends JSONSchema`, returns bare `FromSchema<S>`, no wrapper | compiles |
+| `S extends JSONSchema`, `Result<…>` declared but body casts through | compiles |
+| `S extends JSONSchema`, `Result<…>`, body builds `ok` only | compiles |
+| `S extends object`, `Result<…>`, body builds `ok`/`err` | compiles |
+
+So:
+
+- **The error union's cardinality is not a term.** One member blows up identically to
+  seven. The stated multiplication does not exist.
+- **`Result` alone is not the trigger either.** Declaring the return type is fine; so
+  is returning only `ok`. The blowup needs the *union* of `Ok<T, never>` and
+  `Err<never, E>` produced by two return paths to be checked for assignability against
+  `Result<T, E>` while `T` is an unresolved `FromSchema<S>` over the `JSONSchema` union.
+  The error is reported at the return-type annotation but is caused by the body.
+- Substituting a hand-rolled `Box<A, B>` or a discriminated `Either<A, B>` for `Result`
+  reproduces nothing on its own, so this is not a defect in `neverthrow`.
+
+**The consequence is a step deleted from the plan.** The reason given for deferring
+this check to the error-envelope slice was that the union would not be full-size until
+then. Since size is not a factor, union growth cannot reintroduce the blowup, and there
+is nothing to re-test later. Recorded because the deferral was argued for out loud and
+should be withdrawn out loud.
+
+### Diff against the reference, one line each
+
+| Difference | Verdict |
+|---|---|
+| Reference writes `import { Ajv }`; the first attempt here cast a default import | **I was wrong.** Ajv publishes a named export beside the default, so the named import needs no cast at all. The natural `import Ajv from 'ajv'` fails with "not constructable" and invites a cast that is simply unnecessary. |
+| Reference states `removeAdditional: false` and `useDefaults: false` though both are defaults | **Reference was better, adopted.** Both alternatives fail *silently* — one strips unknown keys instead of rejecting them, turning a mass-assignment attempt into a quietly accepted request. A security-relevant default is worth stating. |
+| Reference handles `body === undefined` explicitly before reaching the schema | **Reference was better, adopted.** Ajv would say `must be object`, which is true and unhelpful. |
+| Reference's field name for a nested unknown key is `isAdmin`; this build emits `address.isAdmin` | **Deliberate, and this build is more informative.** The reference correctly notes the JSON pointer alone names the wrong field, then drops the parent context entirely rather than combining the two. |
+| Reference casts `ok(body as T)`; this build does not | **Equivalent, shape-dependent.** With the reference's positive-branch form the cast is required — the first attempt here hit exactly that. Returning early on failure narrows by elimination and needs none. The mechanism behind the asymmetry was not chased, because the working shape is clear and cheaper than the explanation. |
+| Reference's `ajv` instance is exported; this one is module-private | **Outstanding.** The custom keyword registration and egress validation both need the same instance, so this has to open up in a later slice. Private until something needs it. |
+| Reference carries `currencyScale`, `egressCheck`, `shapeOf`, and log-only arguments in this module | **Deliberate deferral, not omission.** Each belongs to a later slice, and pulling them forward would mean a half-built observability story with no renderer to consume it. |
+| Reference names the helper `isJsonValidRz`; this build renames it to `validatorFor` | **Deliberate departure, and it reverses an earlier decision taken here.** The reference name is predicate-shaped because the reference helper *is* a direct call — it takes a precompiled `ValidateFunction`. This build compiles at module load and is therefore a factory over a schema, so the shape the name describes does not exist here. The old name was kept at first so that the code and the design conversation would share a word; withdrawn because that gap is paid once by a reader of R26, whereas the predicate/factory mismatch is paid at every call site. **The suffix turned out to be the worse half.** Writing down the `Rz` convention (`docs/conventions.md`) showed that a bare `Rz` asserts the thing IS a `Result`, while a function returning one takes an underscore — so `isJsonValidRz` was wrong by two levels of indirection, and wrong in the reference too, where the correct spelling is `isJsonValid_Rz`. A factory takes no marker at all. Reversible with the signature if R26 is ever closed. |
+
+### Also confirmed
+
+The `ajv-formats` interop cast is still required at 3.0.1 — one of the claims flagged
+as least durable, checked at its point of use rather than adopted on trust. Nested
+`additionalProperties: false`, `__proto__` rejected as an unknown key without
+prototype pollution, and `coerceTypes: false` refusing `"1000"` for a number all
+behave as described, and are now asserted by tests rather than believed.
