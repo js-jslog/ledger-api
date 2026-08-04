@@ -26,6 +26,10 @@ export default defineConfig({
     // and make everything at module scope deliberate at the same time.
     // See docs/residual-risk-catalogue.md R12.
 
-    globalSetup: ['./test/toolchain/reset-serialisation-log.ts'],
+    // Losing the serialisation-log entry breaks nothing that any test observes:
+    // `overlaps()` is order-independent, so a log left by a previous run stays
+    // well-nested and the suite still passes. It is there for the aborted run that
+    // leaves a section unclosed, which is the case no assertion currently covers.
+    globalSetup: ['./test/toolchain/reset-serialisation-log.ts', './test/db/global-setup.ts'],
   },
 })

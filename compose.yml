@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ledger
+      # A local development value, not a secret. The database is reachable only on
+      # this machine's loopback, and nothing deployed reads these: a deployed process
+      # is handed a whole connection string in DATABASE_URL. See src/db/connection.ts.
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_DB: ledger
+    ports:
+      # 55432 rather than 5432 so a Postgres already running on the host is not
+      # shadowed. It is also the port the devcontainer path was verified against, and
+      # under docker-in-docker a published port lands on the devcontainer's own
+      # loopback — so this one string works from both.
+      #
+      # Bound to 127.0.0.1 explicitly. The short `55432:5432` form binds 0.0.0.0, which
+      # puts a database holding committed credentials on every interface the machine
+      # has. Nothing needs to reach it from off-box, so the narrower binding costs
+      # nothing and is what makes those credentials genuinely local. R32.
+      - '127.0.0.1:55432:5432'
+    volumes:
+      # NAMED, deliberately, and this is the whole point of the stanza. The postgres
+      # image declares `VOLUME /var/lib/postgresql/data`, so Docker creates an
+      # ANONYMOUS volume even when compose asks for none, and compose then carries
+      # that volume across container recreation. A container built minutes ago comes
+      # up holding a data directory from a previous session.
+      #
+      # Naming it does not stop the persistence — it makes it visible, and it makes
+      # `docker compose down -v` obviously the thing that governs it. Measured: see
+      # docs/divergences.md § Slice 0d.
+      - ledger-data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # What `docker compose up -d --wait` waits on. Without it, `--wait` returns as
+      # soon as the container is running, which is before Postgres accepts
+      # connections — so the first query of a fresh run loses a race it looks like it
+      # should win.
+      test: ['CMD-SHELL', 'pg_isready -U ledger -d ledger']
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  ledger-data:
