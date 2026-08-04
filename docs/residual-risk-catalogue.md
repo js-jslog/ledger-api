@@ -55,6 +55,7 @@ absent by decision, and the reasoning is entry R2.
 | R26 | Validators compile at module load, not ahead of time | Low here, blocking elsewhere | Certain — a capability not present |
 | R27 | The commit gate is local, opt-in per clone, and checks the working tree | Low | Certain on a fresh clone |
 | R28 | The Result naming rule sees bindings, not every position a `Result` can occupy | Low | On the first `Result`-typed class property |
+| R29 | `allErrors: true` makes validation effort scale with how invalid a body is | Low | Bounded only by an unstated body-size default |
 
 ---
 
@@ -745,8 +746,8 @@ visible from here when it changes.
 route-registration time, and the helper is a factory: it takes a schema and returns
 the validating function.
 
-**What it costs.** Two things this service does not currently need, which is why the
-choice is defensible rather than merely convenient.
+**What it costs.** Three things, the first two of which this service does not
+currently need — which is why the choice is defensible rather than merely convenient.
 
 - **Startup work.** Ajv compilation is not free and it happens on every process
   start. Immaterial for a long-running server; it is not immaterial for a function
@@ -754,9 +755,31 @@ choice is defensible rather than merely convenient.
 - **Runtime code generation.** Ajv compiles schemas by generating and evaluating
   code. That is unavailable under a strict Content Security Policy, on runtimes that
   forbid `unsafe-eval`, and in some edge and serverless environments.
+- **A hardening measure is foreclosed, and this half is security rather than
+  deployability.** Because Ajv needs dynamic evaluation, this process can never run
+  with it switched off. Verified: under
+  `node --disallow-code-generation-from-strings`, `ajv.compile` throws
+  `EvalError: Code generation from strings disallowed for this context`. So if any
+  dependency ever turned attacker-supplied data into a string reaching `eval`, that
+  flag could not be used to mitigate it.
+
+**Being precise about what this is not, because the stronger conclusion is the
+tempting one.** It is not an injection path. Ajv's `new Function`
+(`ajv/dist/compile/index.js:89`) is handed source generated from the **schema**, never
+from the data. Every schema here is a hand-written module constant, and a request body
+is only ever an argument to an already-compiled function — so an attacker cannot cause
+code to be generated, and precompiling would not close a hole, because there is not
+one. What it removes is defence in depth, not an exploit.
+
+Two facts that bound it. Compilation happens at **module load**, so the evaluation
+surface is closed before the first request is served rather than being reopened per
+request. And precompilation moves it to build time entirely, which is what would let
+the flag be set.
 
 **How you would trigger it.** Deploy this service somewhere that forbids runtime
-code generation. Validation fails at startup rather than degrading.
+code generation, or start it with dynamic evaluation disabled. Validation fails at
+startup rather than degrading — loudly, which is the better of the two failure modes
+available.
 
 **What closes it.** Ajv's standalone code generation, run as a build step that walks
 the schema modules and emits precompiled validator files. The reference
@@ -920,3 +943,41 @@ no type information instead of degrading to no-op. That is why it is registered 
 If a future glob is added without `projectService` coverage, `pnpm lint` breaks rather
 than quietly stopping enforcement — the correct direction for a rule whose whole value is
 that it is running.
+
+---
+
+## R29 — `allErrors: true` makes validation effort scale with how invalid a body is
+
+**Chosen.** Ajv runs with `allErrors: true`, so validation does not stop at the first
+violation. The specification's 400 response requires a `details` array naming every
+offending field, and a validator that fails fast cannot produce one.
+
+**What it costs.** Ajv's own security guidance names this option as a
+denial-of-service consideration, and the reasoning is sound: without fail-fast, a
+hostile request maximises work rather than minimising it, because every additional
+violation is another error object constructed and retained. Effort scales with how
+invalid the body is, which is entirely under the caller's control.
+
+**How you would trigger it.** Post a body composed to violate as many keywords as
+possible — a few thousand unknown keys against a schema with
+`additionalProperties: false` — and every one is collected rather than the first
+ending the check. Repeat concurrently.
+
+**What actually bounds it today, and this is the part worth recording.** The request
+body size limit, which is **inherited rather than chosen**: `express.json()` defaults
+to 100kb, and nothing in this repository sets it, asserts it, or mentions it. So the
+protection is real but nobody here decided on it, which means nobody would notice it
+changing — a future `express.json({ limit: '10mb' })` added for an unrelated reason
+would widen this hundredfold, silently, with no test objecting.
+
+**What closes it.** Set the limit explicitly at the point `express.json()` is
+registered, with a comment tying it to this entry, and add a test asserting that an
+oversized body is rejected with 413 rather than parsed. That converts an inherited
+default into a stated decision. Ten minutes. The heavier alternative — validating
+fail-fast and re-running with `allErrors` only to build the response body — trades a
+second validation pass on the failure path for the guarantee, and is not worth it at
+this scale.
+
+**Not to be confused with R26.** That entry is about Ajv generating code from
+*schemas*; this one is about Ajv doing unbounded work on *data*. Different mechanism,
+different fix, and precompilation does nothing for this one.
