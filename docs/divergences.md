@@ -258,3 +258,172 @@ The reference's conformance test is the strongest artefact in this area and it i
 currently unreproducible here, because it needs a running service. It is not a test to
 write from scratch at slice 8 — it is the natural closing test of slice 6, and the two
 `F13` findings are only *demonstrated* rather than *asserted* until it exists.
+
+---
+
+## Slice 0d — the database layer
+
+### Claim under test
+
+> `F9` — a compose Postgres with no `volumes:` stanza silently inherits an *anonymous*
+> volume across container recreation, and the failure presents as a broken migration
+> rather than as a dirty volume.
+
+**Confirmed, and the presenting symptom can be worse than the finding records.**
+
+An honest note on the strength of this first, because it changes what the entry is
+worth: the pass was declined earlier as a time decision, and what happened instead is
+that the condition was still present in the working environment when this slice began.
+So this is the probe's own run re-observed rather than an experiment designed here —
+weaker than a designed pass, stronger than a citation. The second observation below is
+new either way.
+
+The environment held a running container from the earlier session:
+
+| | |
+|---|---|
+| container `app-db-1` created | `2026-08-03T13:32:18Z` |
+| its attached anonymous volume `4bccbab…` created | `2026-08-03T08:11:02Z` |
+
+Five hours and twenty-one minutes apart, which is `F9`'s evidence reproduced exactly.
+The container's own log still carried the consequence:
+
+```
+2026-08-03 13:33:34 UTC [547] ERROR:  relation "users" already exists
+```
+
+Three anonymous volumes were present in total, all three Postgres 17 data directories
+(46.1MB, 71.1MB, 46.2MB) — so the mechanism had run at least three times.
+
+**The new part, and it is a worse failure mode than the one recorded.** `F9` describes
+the symptom as `relation "..." already exists`, which at least points at the schema. But
+an inherited data directory carries its *roles* too, and the cluster in this one had been
+initialised with a superuser that a later compose file did not ask for:
+
+```
+FATAL:  role "postgres" does not exist
+```
+
+That accuses the **connection string** — the one part of the setup a developer has
+usually just checked and is most confident about. It is the same root cause presenting
+one step further from it. Worth recording because the natural response is to start
+editing credentials, and no amount of editing credentials fixes a stale volume.
+
+**The fix, verified in both directions.** With `ledger-data` declared and named, the
+daemon holds exactly one volume, `app_ledger-data`, instead of an unattributable hash.
+Naming it does **not** make it ephemeral, and that distinction is the whole reason the
+README troubleshooting line exists rather than being obvious:
+
+| Command | Volume | Schema |
+|---|---|---|
+| `docker compose down` | survives | survives — `kysely_migration`, `kysely_migration_lock`, `migration_pipeline_proof` all still present after `up` |
+| `docker compose down -v` | removed | rebuilt, and `initdb/` runs again, recreating `ledger` and `ledger_test` |
+
+The cold start after `down -v` brings the suite up green from nothing, which is the only
+path that exercises `initdb/` at all.
+
+### Second claim under test, and this one came back negative
+
+> Appending to `globalSetup` matters because "silently dropping it disables the toolchain
+> test's reset".
+
+**Half right, and the wrong half is the one that was warned about.** Both entries were
+removed in turn and the suite run:
+
+| Entry removed | Result |
+|---|---|
+| `test/db/global-setup.ts` | Fails, but *initially for the wrong reason* — see below |
+| `test/toolchain/reset-serialisation-log.ts` | **Nothing fails. The whole suite passes.** |
+
+The serialisation-log truncation is genuinely silent when removed, because `overlaps()`
+is order-independent: records accumulated across runs stay well-nested, so appending more
+well-nested records to a stale log changes no outcome. What that truncation actually
+protects against is an *aborted* run leaving an unclosed `enter`, and nothing observes
+its absence until one happens. The warning was right that the entry must not be dropped
+and wrong about what would tell you.
+
+**The database half was only loud by accident, and that got fixed rather than
+documented.** With the reset skipped, the failure was
+`expected [ …(2) ] to deeply equal [ Array(1) ]` — a row count, inside a test about typed
+queries. Loud, but accusing the wrong component, which is the same pathology as `F9`
+itself. It was also luck: the assertion happened to be an exact-equality on rows. So
+`migration-pipeline.test.ts` now asserts the empty starting state explicitly, and the
+same experiment fails on that assertion instead.
+
+### Third claim, tested at its point of use
+
+> `Migrator` and `FileMigrationProvider` are only on the `kysely/migration` subpath and
+> are `undefined` on the root export.
+
+**Confirmed at kysely 0.29.4**, in both directions: both are `undefined` on the root
+export and functions on the subpath. Checked rather than trusted because every tutorial
+and every model completion has the old path, and the failure is at runtime.
+
+### A guard adopted from the reference and then deleted by measurement
+
+The reference adds a check that `migrateToLatest` found *something*, on the reasoning
+that a wrong `migrationFolder` "silently finds zero migrations and reports success". It
+was adopted here, and then removed, because the premise does not hold. Every reachable
+way of misdirecting the migrator is already loud:
+
+| Situation | What actually happens |
+|---|---|
+| Folder does not exist | `ENOENT: no such file or directory, scandir '…'` — names the path |
+| Folder exists but has lost already-applied migrations | Kysely's own `corrupted migrations: previously executed migration 001-migration-pipeline-proof is missing` — **better than a hand-written guard, because it names the missing migration** |
+| Fresh database *and* empty folder | Silent — but `migration-pipeline.test.ts` asserts the ledger's contents, so this suite fails anyway |
+
+So the guard covered nothing that was silent, and it required a parameter on a production
+function to be testable at all. It is gone; the two failure modes are pinned as tests
+instead, which is what makes the *absence* of the guard an argued position rather than an
+oversight.
+
+### Deliberate departures in 0d
+
+- **Two databases, `ledger` and `ledger_test`, created by `initdb/`.** The §3 invariant
+  requires the destructive helper to assert a `_test` suffix, and with a single database
+  that assertion could only ever be tested against a name nobody uses. With `ledger`
+  present, the guard stands in front of a live database and the test that proves it fires
+  points the helper at exactly that string.
+- **The reset helper takes a connection string and opens its own connection**, rather
+  than accepting a handle. Accepting a handle lets the checked string and the connected
+  database diverge, which is the failure the guard exists to prevent. Same structural
+  argument as the repository port taking no balance (§7): make the dangerous thing
+  inexpressible rather than discouraged.
+- **The guard throws; it does not return a `Result`.** The codebase is errors-as-values,
+  and this is the exception that proves the rule — a `Result` is a value a caller can
+  hold and ignore, and the entire purpose here is that there is no way past.
+- **All test-only code lives under `test/db/`**, including the guard. The reference keeps
+  its reset in `src/db/reset.ts`, which puts `drop schema public cascade` in the
+  production module graph.
+- **No `migrate` script.** It needs a TypeScript runner, which forces the `tsx`-versus-
+  native-Node decision still open from slice 0a. The migrator is driven from code and
+  tests until the entrypoint exists at 0e. Worth recording that this slice supplies
+  evidence for that decision: `FileMigrationProvider` loads `.ts` migration files under
+  vitest with no `tsx` present.
+
+### Diff against the reference, one line each
+
+| Difference | Verdict |
+|---|---|
+| Reference `compose.yml` declares **no `volumes:` stanza at all** | **Reference was wrong, against its own finding.** This is the `F9` condition, not the fix. `FINDINGS.md` says to declare and name the volume; the code never did. Its own evidence sat in an anonymous volume for the life of the branch. |
+| Reference has no second database; probes point at `ledger_probe` via `.env` | **Reference was wrong**, and doubly so. `ledger_probe` would fail this build's own `_test` guard, so the name is incompatible with the §3 invariant. And the isolation depended on `.env`, which is in `.gitignore` — absent that untracked file the probes fall back to `ledger`, the development database, and drop its schema. |
+| Reference `resetSchema` has **no `_test` assertion**, and takes a `Kysely` handle | **Reference was wrong**, as §3 already anticipated. The handle signature is the deeper problem: even with a guard added, there would be nothing tying the name checked to the database connected. |
+| Reference resolves the migrations folder with `import.meta.dirname` | **Reference was better, adopted.** The first attempt here used `fileURLToPath(new URL(…))`, which is the pre-Node-20.11 spelling and strictly more machinery for the same result. |
+| Reference guards against a zero-migration run | **Reference was wrong, and this was adopted before being measured.** See the section above — every reachable case is already loud, and Kysely's own corruption check is better than the guard. |
+| Reference renders a non-`Error` failure as `` `migration failed: ${JSON.stringify(error)}` `` | **Deliberate departure, and this build is safer.** `JSON.stringify` throws outright on a circular object, so the fallback for an unknown shape can itself fail. Attached as `cause` instead, which preserves the original whatever it is. |
+| Reference has `truncateAll` for between-test isolation | **Outstanding, not a departure.** There is nothing to truncate yet. The reference's shape is the target, and the trade taken meanwhile is recorded as R31. |
+| Reference exposes `connectionString()` reading `DATABASE_URL` with a default | **Equivalent in mechanism, extended here.** Same default-with-override shape; this build adds the parallel test-database accessor so the suite's target is chosen in code rather than by whatever happens to be exported in a shell. |
+| Reference mounts an `initdb` script only in the probe compose, as a bind-mount test | **Equivalent, different purpose.** Its script existed to prove the DinD bind mount works; this one creates the test database. |
+| Reference publishes the database as `"55432:5432"` | **Deliberate departure.** The short form binds `0.0.0.0`, putting a database with committed credentials on every interface. `127.0.0.1:55432:5432` here — nothing needs to reach it from off-box, and it is what makes R32's argument for committing those credentials actually true rather than merely stated. |
+| Reference uses `function` declarations; this build uses arrow constants | **Equivalent.** Both spellings are already present in this repository. |
+| Reference migration files take `Kysely<unknown>` | **Reference was right, adopted without change.** A migration must keep compiling after the schema type has moved past it. |
+| Reference's `down` uses `.ifExists()` on every drop | **Deliberate departure.** With one table and a schema that is dropped wholesale before every run, `ifExists` would hide a `down` that failed to do its job. |
+
+### One thing to carry forward
+
+The suite resets **once per run**, not between test files or between tests. That is
+sufficient while one file touches the database and will not be when step 2 adds a second.
+The reference's `truncateAll` is the right shape to adopt at that point — including its
+note that `cascade` is required because of the foreign-key chain, and `restart identity`
+so ids do not drift between tests. Recorded as R31 so it is a decision with a date rather
+than something discovered when two files start interfering.
