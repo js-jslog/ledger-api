@@ -779,11 +779,19 @@ generated merge and revert messages, and — the case that matters — to ignore
 staged diff that `commit.verbose` appends as comments, which contains the forbidden
 phrases legitimately because `openapi.yaml` is a supplied input committed unaltered.
 
-**What it costs.** Three gaps, in ascending order of how much they matter.
+**What it costs.** Four gaps, in ascending order of how much they matter.
 
 - **Opt-in.** `core.hooksPath` is local configuration, so a fresh clone has no
   hooks until someone runs the command. The gate protects this machine, not the
   repository.
+- **The gate can be present and inert, which is worse than absent.** This
+  devcontainer sets `core.fileMode = false`, so git ignores the on-disk executable
+  bit and a hook committed from here lands as `100644` however it was `chmod`ed. Git
+  then *silently skips* a non-executable hook — no warning, no error. A clone can
+  therefore have `.githooks` present, `core.hooksPath` set correctly, and no gate at
+  all. Unlike being opt-in, where nothing appears to run, here everything appears
+  installed. This is not specific to hooks: it applies to every executable this
+  repository will ever commit, a CI script or a container helper included.
 - **Working tree, not staged content.** The hook runs the gate over the working
   tree. Staging a subset and committing can therefore record a green commit whose
   own tree does not build.
@@ -796,6 +804,12 @@ phrases legitimately because `openapi.yaml` is a supplied input committed unalte
 anything: nothing runs. Or `git add` one file of several, break another, and
 commit: the gate passes on the working tree while the committed tree does not
 build. Or write a message naming the exercise in words the list does not carry.
+
+Or — the one that has actually happened — add an executable to `.githooks`, `chmod
++x` it, commit, and clone: the file arrives without the bit and is skipped in
+silence. Caught here only by cold-cloning to check, which is why that check is worth
+doing rather than assuming. The fix is `git update-index --chmod=+x <path>`, and
+`git ls-files -s` is what confirms it: the mode must read `100755`, not `100644`.
 
 **What closes it.** CI, which §13 already calls for: `pnpm install
 --frozen-lockfile` then typecheck, lint and test against the pushed tree. That
