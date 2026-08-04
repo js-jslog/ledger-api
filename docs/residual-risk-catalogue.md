@@ -57,6 +57,8 @@ absent by decision, and the reasoning is entry R2.
 | R28 | The Result naming rule sees bindings, not every position a `Result` can occupy | Low | On the first `Result`-typed class property |
 | R29 | `allErrors: true` makes validation effort scale with how invalid a body is | Low | Bounded only by an unstated body-size default |
 | R30 | The published request schemas describe something looser than the service enforces | Medium | Certain for any client generated from the specification |
+| R31 | The test suite resets once per run, not between test files or tests | Low now, Medium from step 2 | Certain once two files write the same table |
+| R32 | Local development credentials are committed in `compose.yml` | Low | Only if the values are reused outside a developer machine |
 
 ---
 
@@ -1028,3 +1030,74 @@ document is a different act from fixing a defect in it. Every other edit in
 or documents a guarantee. This one would narrow what callers may send, and it is the only
 edit on the list that could break a conforming client. That is a decision to raise rather
 than to make silently — which is the whole reason this entry exists instead of the edit.
+
+---
+
+## R31 — The test suite resets once per run, not between test files or tests
+
+**Chosen.** `test/db/global-setup.ts` drops and recreates the `public` schema, then
+migrates, once per run in the main vitest process. There is no truncation between test
+files and none between individual tests.
+
+**What it costs.** Test files share one schema and one set of rows, so writes made by one
+are visible to another. The starting state is guaranteed for the *run*, not for any file
+within it. Order-dependence becomes possible: a file can pass alone and fail in the suite,
+which is the same class of defect that `isolate: false` was declined for in R12 — so
+accepting it here is the narrower version of a cost already refused once.
+
+Nothing suffers from it today, because exactly one file touches the database and it asserts
+its own empty starting state.
+
+**How you would trigger it.** Add a second test file that inserts into a table a first file
+reads, then run the suite. `fileParallelism: false` means the two will not interleave, so
+the symptom is not a race — it is the second file finding rows it did not create, and the
+failure names a row count rather than the missing isolation.
+
+**What closes it.** A `truncate table … restart identity cascade` in a `beforeEach`, which
+is the shape the reference implementation already has. `cascade` is required because
+`transactions` references `accounts` references `users` — without it Postgres refuses,
+naming a table the statement did not mention. `restart identity` keeps ids from drifting
+between tests. It is a few minutes of work and it belongs with step 2, which is where the
+first real table and the second database-touching test file both arrive. Deferred rather
+than built because there is currently nothing to truncate, and a `beforeEach` naming tables
+that do not exist would not compile.
+
+---
+
+## R32 — Local development credentials are committed in `compose.yml`
+
+**Chosen.** `compose.yml` sets `POSTGRES_USER: ledger` and `POSTGRES_PASSWORD: ledger`,
+and the matching connection strings are defaults in `src/db/connection.ts`. Both are
+committed to a public repository.
+
+**What it costs.** It is in tension with the §3 invariant "no signing key, secret or
+credential committed", and a reader scanning for that invariant will find these and have
+to decide for themselves that they do not count. They do not: the port is bound to
+`127.0.0.1`, the values grant nothing beyond a developer machine, and a deployed process is
+handed a whole connection string in `DATABASE_URL` and never assembles one from these
+parts. But "it is fine, and here is why" is a judgement the repository should state rather
+than leave to be re-derived.
+
+**That first clause was false when this entry was written, and the code was changed to make
+it true.** The entry claimed loopback publication while `compose.yml` said `55432:5432`,
+which binds `0.0.0.0` — so a database holding committed credentials was reachable on every
+interface the machine had. The argument for committing the credentials depended on a
+property the configuration did not have. It now reads `127.0.0.1:55432:5432`.
+
+The real cost is precedent. A committed credential that is genuinely harmless normalises
+the shape, and the next one may not be — particularly the JWT signing key arriving at step
+3, which is the same kind of string in the same kind of file and must not be treated the
+same way.
+
+**How you would trigger it.** Reuse these values anywhere reachable from another host, or
+copy the pattern for the signing key at step 3 on the grounds that `compose.yml` already
+does it.
+
+**What closes it.** Requiring the values from the environment with no default, which was
+declined deliberately: it breaks the cold-start path a reviewer takes, where
+`docker compose up -d --wait` followed by `pnpm test` has to work with nothing configured.
+A `.env.example` was also declined — it would be a second copy of the same string, free to
+drift from the default in code, for no gain over having the default in code. The honest
+closure is not to remove these but to make the boundary explicit: the signing key at step 3
+is generated per run in development and read from the environment everywhere else, with no
+committed fallback, and this entry is the reason that asymmetry exists.
