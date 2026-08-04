@@ -53,6 +53,7 @@ absent by decision, and the reasoning is entry R2.
 | R24 | The payload-logging ban has one permitted constructor, which is also the catch-all | Low | Only via future call sites |
 | R25 | Log record keys can be attacker-controlled via the JWT payload path | Low | Harmless with a JSON sink |
 | R26 | Validators compile at module load, not ahead of time | Low here, blocking elsewhere | Certain — a capability not present |
+| R27 | The commit gate is local, opt-in per clone, and checks the working tree | Low | Certain on a fresh clone |
 
 ---
 
@@ -758,3 +759,49 @@ factory here. That mismatch is inherited: the name belongs to a reference
 implementation where validators are precompiled, so a direct predicate-shaped call is
 the natural form. Kept deliberately, so the code and the design conversation use the
 same word.
+
+---
+
+## R27 — The commit gate is local, opt-in per clone, and checks the working tree
+
+**Chosen.** Two committed git hooks under `.githooks`, activated by
+`git config core.hooksPath .githooks`. `pre-commit` runs typecheck, lint and the
+full suite; `commit-msg` rejects a message containing any phrase that identifies
+the origin of this work. Native hooks rather than husky: husky's value is
+automatic setup across a team, there is no team, and its cost is a `prepare`
+lifecycle script in the reviewer's `pnpm install --frozen-lockfile` — the one path
+that forms their first impression.
+
+Verified in both directions rather than assumed. `pre-commit` was shown to block a
+type error, a failing test and a lint error independently; `commit-msg` was shown
+to reject five identifying messages and accept four legitimate ones, to skip
+generated merge and revert messages, and — the case that matters — to ignore the
+staged diff that `commit.verbose` appends as comments, which contains the forbidden
+phrases legitimately because `openapi.yaml` is a supplied input committed unaltered.
+
+**What it costs.** Three gaps, in ascending order of how much they matter.
+
+- **Opt-in.** `core.hooksPath` is local configuration, so a fresh clone has no
+  hooks until someone runs the command. The gate protects this machine, not the
+  repository.
+- **Working tree, not staged content.** The hook runs the gate over the working
+  tree. Staging a subset and committing can therefore record a green commit whose
+  own tree does not build.
+- **The denylist fails open.** A phrase not on the list passes. This is the right
+  tool anyway, because the thing guarded against is not an adversary choosing new
+  words — it is an author writing from a source document saturated in them — but it
+  is a fence, not a proof.
+
+**How you would trigger it.** Clone fresh, skip the config line, and commit
+anything: nothing runs. Or `git add` one file of several, break another, and
+commit: the gate passes on the working tree while the committed tree does not
+build. Or write a message naming the exercise in words the list does not carry.
+
+**What closes it.** CI, which §13 already calls for: `pnpm install
+--frozen-lockfile` then typecheck, lint and test against the pushed tree. That
+closes the first two gaps properly rather than approximately — it is not opt-in and
+it tests exactly what was committed. The hooks are the fast local echo of it, not a
+substitute. Checking staged content locally would mean stashing the remainder,
+which buys a case this workflow does not produce (slices are committed whole) at
+the price of a way to lose work. The README must carry the `core.hooksPath` line in
+its prerequisites, or the gate silently does not exist for anyone else.
