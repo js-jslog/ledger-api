@@ -7,6 +7,8 @@ info:
 tags:
   - name: account
     description: Manage a bank account
+  - name: auth
+    description: Authenticate a user
   - name: transaction
     description: Manage transactions on a bank account
   - name: user
@@ -383,7 +385,7 @@ paths:
           required: true
           schema:
             type: string
-            pattern: ^tan-[A-Za-z0-9]$
+            pattern: ^tan-[A-Za-z0-9]+$
       security:
         - bearerAuth: []
       responses:
@@ -423,6 +425,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /v1/auth/login:
+    post:
+      tags:
+        - auth
+      description: Authenticate a user and issue a bearer token
+      operationId: login
+      requestBody:
+        description: The credentials to authenticate with
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      responses:
+        '200':
+          description: Authentication succeeded and a token was issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Invalid details supplied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BadRequestErrorResponse"
+        '401':
+          description: The supplied credentials were not recognised
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        '500':
+          description: An unexpected error occurred
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /v1/users:
     post:
       tags:
@@ -445,6 +485,16 @@ paths:
                 $ref: '#/components/schemas/UserResponse'
         '400':
           description: Invalid details supplied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BadRequestErrorResponse"
+        '409':
+          description: A user already exists with the supplied email address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         '500':
           description: An unexpected error occurred
           content:
@@ -648,6 +698,7 @@ components:
             - "personal"
     ListBankAccountsResponse:
       type: object
+      additionalProperties: false
       required:
         - accounts
       properties:
@@ -657,6 +708,7 @@ components:
              $ref: "#/components/schemas/BankAccountResponse"
     BankAccountResponse:
       type: object
+      additionalProperties: false
       required:
         - accountNumber
         - sortCode
@@ -669,7 +721,7 @@ components:
       properties:
         accountNumber:
           type: string
-          format: ^01\d{6}$
+          pattern: ^01\d{6}$
           examples:
             - "01234567"
             - "01765432"
@@ -687,7 +739,6 @@ components:
           type: number
           format: double
           minimum: 0.00
-          maximum: 10000.00
           description: "Currency amount with up to two decimal places"
           examples:
             - 0.00
@@ -731,6 +782,7 @@ components:
           type: string
     ListTransactionsResponse:
       type: object
+      additionalProperties: false
       required:
         - transactions
       properties:
@@ -740,6 +792,7 @@ components:
              $ref: "#/components/schemas/TransactionResponse"
     TransactionResponse:
       type: object
+      additionalProperties: false
       required:
         - id
         - amount
@@ -749,7 +802,7 @@ components:
       properties:
         id:
           type: string
-          pattern: ^tan-[A-Za-z0-9]$
+          pattern: ^tan-[A-Za-z0-9]+$
           examples:
             - tan-123abc
         amount:
@@ -770,7 +823,7 @@ components:
           type: string
         userId:
           type: string
-          format: ^usr-[A-Za-z0-9]+$
+          pattern: ^usr-[A-Za-z0-9]+$
           examples:
             - usr-abc123
         createdTimestamp:
@@ -783,6 +836,7 @@ components:
         - address
         - phoneNumber
         - email
+        - password
       properties:
         name:
           type: string
@@ -810,10 +864,14 @@ components:
               type: string
         phoneNumber:
           type: string
-          format: ^\+[1-9]\d{1,14}$
+          pattern: ^\+[1-9]\d{1,14}$
         email:
           type: string
           format: email
+        password:
+          type: string
+          minLength: 12
+          writeOnly: true
     UpdateUserRequest:
       type: object
       properties:
@@ -843,12 +901,13 @@ components:
               type: string
         phoneNumber:
           type: string
-          format: ^\+[1-9]\d{1,14}$
+          pattern: ^\+[1-9]\d{1,14}$
         email:
           type: string
           format: email
     UserResponse:
       type: object
+      additionalProperties: false
       required:
         - id
         - name
@@ -860,13 +919,14 @@ components:
       properties:
         id:
           type: string
-          format: ^usr-[A-Za-z0-9]+$
+          pattern: ^usr-[A-Za-z0-9]+$
         name:
           type: string
           examples:
             - "Test User"
         address:
           type: object
+          additionalProperties: false
           required:
             - line1
             - town
@@ -887,7 +947,7 @@ components:
               type: string
         phoneNumber:
           type: string
-          format: ^\+[1-9]\d{1,14}$
+          pattern: ^\+[1-9]\d{1,14}$
         email:
           type: string
           format: email
@@ -897,6 +957,27 @@ components:
         updatedTimestamp:
           type: string
           format: 'date-time'
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          writeOnly: true
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          description: "Supply as a bearer token in the Authorization header of subsequent requests"
     ErrorResponse:
       type: object
       required:
