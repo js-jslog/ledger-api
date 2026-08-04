@@ -9,11 +9,8 @@
     we would want, and that it is a volume, rather than a mount */
   "workspaceMount": "source=ledger-api,target=/app,type=volume",
   "workspaceFolder": "/app",
-  /* Docker-in-Docker. To allow local testing of prod-like builds. We will
-     consider removing this if we are enough control and insight in to the
-     devops platform.
-     If we decide to keep it then we should consider changing from "latest" to a
-     specific version to match devops */
+  /* Docker-in-Docker. Now essential for the Postgres DB to run which is
+     essential for the purpose of this container */
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {
       "version": "latest",
