@@ -61,6 +61,25 @@ export const toPennies = (amount: number): Result<Pennies, DomainError> => {
   return ok((pennies === 0 ? 0 : pennies) as Pennies)
 }
 
+/**
+ * The way back out, at the egress boundary and nowhere else. It takes no `Result` because
+ * it cannot fail: every `Pennies` came through `toPennies`, so there is no unrepresentable
+ * value to reject on the way back.
+ *
+ * The asymmetry with `toPennies` is the point. Going in, the hard part is that a client's
+ * decimal may not be a legal amount at all, so the conversion has to be a validator.
+ * Coming out, the value is already an integer this service produced.
+ *
+ * WHY DIVISION IS SAFE HERE AND MULTIPLICATION WAS NOT. `amount * 100` is unsafe because
+ * the input is a decimal that IEEE 754 cannot hold exactly — `0.29 * 100` is
+ * `28.999999999999996`. `pennies / 100` starts from an integer, and the quotient is the
+ * nearest double to the exact two-decimal value; `JSON.stringify` then emits the shortest
+ * decimal that reads back as that double, which is the two-decimal form. Asserted over the
+ * whole published range in `money.test.ts`, both as a round trip and as serialised text,
+ * rather than argued here.
+ */
+export const toDecimal = (pennies: Pennies): number => pennies / 100
+
 const invalidAmount = (message: string): DomainError =>
   validationFailed('Invalid request body', [
     { field: AMOUNT_FIELD, message, type: 'currencyScale' },

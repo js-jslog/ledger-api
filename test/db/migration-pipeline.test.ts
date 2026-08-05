@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -22,12 +22,23 @@ afterAll(async () => {
 // The schema this file reads was reset and migrated once by test/db/global-setup.ts,
 // so these assertions are about what the pipeline produced rather than about anything
 // this file did.
-test('the migrator recorded the migration in its own ledger', async () => {
+//
+// The expectation is read off the folder rather than written out, and that is a repair
+// rather than a convenience: a literal list made every new table edit a test in this
+// directory, which has nothing to do with what the test is for. What it asserts is the
+// pipeline property — everything on disk reached the ledger — and it now asserts that for
+// migrations nobody had written when it was.
+test('the migrator recorded every migration in its own ledger', async () => {
+  const onDisk = (await readdir(MIGRATIONS_FOLDER)).map((file) => path.parse(file).name).sort()
+
   const { rows } = await sql<{ name: string }>`
     select name from kysely_migration order by name
   `.execute(db)
 
-  expect(rows.map((row) => row.name)).toEqual(['002-users'])
+  // Otherwise an empty folder satisfies an empty ledger and this passes while the pipeline
+  // does nothing at all.
+  expect(onDisk.length).toBeGreaterThan(0)
+  expect(rows.map((row) => row.name)).toEqual(onDisk)
 })
 
 // These two exist to establish that `migrateToLatest` needs no "found no migrations"

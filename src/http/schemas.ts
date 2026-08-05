@@ -111,3 +111,28 @@ export const userParamsSchema = {
     userId: { type: 'string', pattern: '^usr-[A-Za-z0-9]+$' },
   },
 } as const
+
+export const accountParamsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['accountNumber'],
+  properties: {
+    accountNumber: { type: 'string', pattern: '^01\\d{6}$' },
+  },
+} as const
+
+/**
+ * `sortCode`, `currency` and `balance` are absent, and that is the published request rather
+ * than a narrowing of it: a client says what the account is called and what type it is, and
+ * the service decides everything else. An opening balance supplied by the caller is exactly
+ * the mass assignment `additionalProperties: false` is here to refuse.
+ */
+export const createAccountSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'accountType'],
+  properties: {
+    name: { type: 'string' },
+    accountType: { type: 'string', enum: ['personal'] },
+  },
+} as const

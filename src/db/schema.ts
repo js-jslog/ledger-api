@@ -1,5 +1,7 @@
 import type { ColumnType } from 'kysely'
 
+import type { Pennies } from '../domain/money.js'
+
 /**
  * The Kysely database interface. Each table arrives with the step that reads it,
  * alongside its own migration, because the migrations are where the money
@@ -8,6 +10,7 @@ import type { ColumnType } from 'kysely'
  */
 export type Database = {
   users: UsersTable
+  accounts: AccountsTable
 }
 
 /**
@@ -30,6 +33,24 @@ export type UsersTable = {
   phone_number: string
   email: string
   password_hash: string
+  created_at: TriggerMaintained
+  updated_at: TriggerMaintained
+}
+
+export type AccountsTable = {
+  account_number: string
+  user_id: string
+  name: string
+  account_type: string
+  /**
+   * `never` in the insert position because the opening balance belongs to the column
+   * default rather than to application code, so choosing one is a compile error rather
+   * than a decision made twice. It reads and updates as `Pennies`, which is what keeps
+   * "money is an integer count of pennies inside the service boundary" true without a cast
+   * at the repository boundary — the column is already the integer that `toPennies`
+   * produces.
+   */
+  balance: ColumnType<Pennies, never, Pennies>
   created_at: TriggerMaintained
   updated_at: TriggerMaintained
 }
