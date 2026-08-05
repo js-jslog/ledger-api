@@ -1,4 +1,6 @@
-import { hash } from 'bcryptjs'
+import { randomBytes } from 'node:crypto'
+
+import { compare, hash, hashSync } from 'bcryptjs'
 import { ResultAsync } from 'neverthrow'
 
 import { unexpected, type DomainError } from './errors.js'
@@ -37,3 +39,24 @@ export const bcryptCost = (env: NodeJS.ProcessEnv = process.env): number => {
 
 export const hash_passwordRzA = (plain: string): ResultAsync<string, DomainError> =>
   ResultAsync.fromPromise(hash(plain, bcryptCost()), unexpected)
+
+export const verify_passwordRzA = (plain: string, hashed: string): ResultAsync<boolean, DomainError> =>
+  ResultAsync.fromPromise(compare(plain, hashed), unexpected)
+
+/**
+ * What login compares against when the email is unknown, so that an unknown address and a
+ * wrong password cost the same wall-clock time. Without it, bcrypt runs on one path and
+ * not the other, and the difference is large — tens of milliseconds at the working cost —
+ * so the endpoint answers "does this email exist" to anyone with a stopwatch.
+ *
+ * Built at the configured cost rather than hardcoded, because equal time is the whole
+ * point and a dummy at a different cost from the real hashes reinstates the gap it exists
+ * to close. Built once at module load, synchronously: it is one hash per process, and the
+ * alternative is a lazily-memoised value that has to be threaded through an async path for
+ * no gain.
+ *
+ * Hashed from random bytes rather than from a fixed string, so that no supplied password
+ * can match it. Login guards that case anyway; this makes the guard unreachable rather
+ * than merely correct.
+ */
+export const DUMMY_HASH = hashSync(randomBytes(32).toString('hex'), bcryptCost())

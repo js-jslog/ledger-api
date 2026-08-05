@@ -44,3 +44,45 @@ export const createUserSchema = {
     password: { type: 'string', minLength: 12, maxLength: 72 },
   },
 } as const
+
+/**
+ * The fourth ingress point, and the one that does not look like one: a decoded JWT payload
+ * is input from whoever presented the token, so it goes through the same funnel as a
+ * request body rather than being trusted because a signature checked out.
+ *
+ * `additionalProperties: false` is what gives the section 3 invariant its teeth, and the
+ * mechanism is worth stating because it reads like a formality. jose puts `iat` and `exp`
+ * into every token this service issues. So a schema that named only `sub` would reject
+ * every valid token — the schema cannot omit a claim the service actually mints, because
+ * omitting one fails closed and loudly rather than waving the claim through.
+ */
+export const tokenClaimsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['sub', 'iat', 'exp'],
+  properties: {
+    sub: { type: 'string' },
+    iat: { type: 'number' },
+    exp: { type: 'number' },
+  },
+} as const
+
+/**
+ * `password` carries no `minLength` and no `maxLength`, and the asymmetry with signup is
+ * deliberate rather than an omission. Enforcing the signup policy here turns a short
+ * password into a 400 naming the minimum, where it owes an indistinguishable 401 — a
+ * validation message is an oracle for the password policy, and this is the one endpoint
+ * where that costs something. Recorded in docs/spec-changes.md § 2.
+ *
+ * `format: 'email'` stays, because it says nothing a caller does not already know about
+ * their own input and it keeps the published schema honest.
+ */
+export const loginSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['email', 'password'],
+  properties: {
+    email: { type: 'string', format: 'email' },
+    password: { type: 'string' },
+  },
+} as const

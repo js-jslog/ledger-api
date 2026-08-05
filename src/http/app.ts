@@ -4,7 +4,9 @@ import type { Kysely } from 'kysely'
 import type { Database } from '../db/schema.js'
 import { correlationMiddleware } from '../observability/correlation.js'
 import { usersRepository } from '../repo/users.js'
+import { authService } from '../service/auth.js'
 import { usersService } from '../service/users.js'
+import { login } from './auth.js'
 import { errorMiddleware, notFoundFallback } from './error-middleware.js'
 import { health } from './health.js'
 import { createUser } from './users.js'
@@ -23,7 +25,9 @@ export const createApp = (db: Kysely<Database>): Express => {
 
   // The whole of the wiring. Each service is built once here from the handle this
   // function was given, so nothing below reaches for a connection of its own.
-  const users = usersService(usersRepository(db))
+  const repo = usersRepository(db)
+  const users = usersService(repo)
+  const auth = authService(repo)
 
   // Route-independent concerns, above every route rather than inside any handler. The
   // body limit is a decision rather than a default: without one, a request body is
@@ -34,6 +38,7 @@ export const createApp = (db: Kysely<Database>): Express => {
 
   app.get('/health', health)
   app.post('/v1/users', createUser(users))
+  app.post('/v1/auth/login', login(auth))
 
   // After every route, in this order. `notFoundFallback` takes no path argument: under
   // path-to-regexp v8 both `app.use('*')` and `app.all('*')` throw at startup.

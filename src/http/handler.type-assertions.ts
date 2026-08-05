@@ -13,7 +13,7 @@ import type { Request } from 'express'
 import { errAsync, ok, okAsync, type Result, type ResultAsync } from 'neverthrow'
 
 import type { DomainError } from '../domain/errors.js'
-import { publicHandler, type Success } from './handler.js'
+import { authedHandler, publicHandler, type Success } from './handler.js'
 
 type Body = { readonly id: string }
 
@@ -85,4 +85,23 @@ publicHandler(
   (_req: Request): Promise<Result<Success<Body>, DomainError>> =>
     // @ts-expect-error -- 204 is not one of the two success statuses this API returns.
     okAsync({ status: 204, body: { id: 'x' } }),
+)
+
+// ── The authenticated adapter ────────────────────────────────────────────────────
+// Everything above holds for `authedHandler` too, because it wraps `publicHandler`
+// rather than replacing it. What is added here is the identity parameter.
+
+authedHandler(schema, (_userId: string, _req: Request): ResultAsync<Success<Body>, DomainError> =>
+  okAsync(success),
+)
+
+// ── A handler that does not take an identity ─────────────────────────────────────
+// The shape someone writes by copying an unauthenticated route. It fails because the
+// adapter passes the id first, so a handler with `req` in that position is asking for a
+// `Request` and being handed a `string`.
+
+authedHandler(
+  schema,
+  // @ts-expect-error -- the first parameter is the authenticated user id, not the request.
+  (_req: Request): ResultAsync<Success<Body>, DomainError> => okAsync(success),
 )

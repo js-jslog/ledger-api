@@ -24,6 +24,11 @@ type AlreadyExists = {
   readonly message: string
 }
 
+type Unauthenticated = {
+  readonly kind: 'Unauthenticated'
+  readonly message: string
+}
+
 type Unexpected = {
   readonly kind: 'Unexpected'
   readonly message: string
@@ -33,6 +38,7 @@ export type DomainError = { readonly correlationId: string } & (
   | ValidationFailed
   | NotFound
   | AlreadyExists
+  | Unauthenticated
   | Unexpected
 )
 
@@ -81,6 +87,7 @@ const LEVELS: Record<DomainError['kind'], Level> = {
   ValidationFailed: 'info',
   NotFound: 'info',
   AlreadyExists: 'info',
+  Unauthenticated: 'info',
   Unexpected: 'error',
 }
 
@@ -110,6 +117,20 @@ export const notFound = (message: string, fields: PayloadForbidden = {}): Domain
 
 export const alreadyExists = (message: string, fields: PayloadForbidden = {}): DomainError =>
   born({ kind: 'AlreadyExists', message }, fields)
+
+/**
+ * The only constructor that takes no message, and the omission is the mechanism.
+ *
+ * Every reason to answer 401 — no header, a malformed one, a signature that does not
+ * verify, an expired token, an unknown email, a wrong password — must be indistinguishable
+ * from outside, because a client that can tell them apart can ask which emails exist. A
+ * `message` parameter is how that distinction gets reintroduced, one plausible call site at
+ * a time. There is no parameter, so there is nothing to vary.
+ *
+ * The reason still reaches the log, through `fields`, where naming it costs nothing.
+ */
+export const unauthenticated = (fields: PayloadForbidden = {}): DomainError =>
+  born({ kind: 'Unauthenticated', message: 'Authentication failed' }, fields)
 
 const describeCause = (cause: unknown): LogFields =>
   cause instanceof Error

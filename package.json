@@ -32,6 +32,7 @@
     "ajv-formats": "^3.0.1",
     "bcryptjs": "^3.0.3",
     "express": "^5.2.1",
+    "jose": "^6.2.8",
     "json-schema-to-ts": "^3.1.1",
     "kysely": "^0.29.4",
     "neverthrow": "^8.2.0",

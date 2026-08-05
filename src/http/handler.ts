@@ -1,7 +1,8 @@
 import type { Request, RequestHandler } from 'express'
-import type { Result } from 'neverthrow'
+import { err, ok, type Result } from 'neverthrow'
 
-import type { DomainError } from '../domain/errors.js'
+import { unauthenticated, type DomainError } from '../domain/errors.js'
+import { verify_tokenRzA } from '../domain/tokens.js'
 import { renderError } from './render-error.js'
 import { responseValidatorFor } from './validator-for.js'
 
@@ -31,8 +32,8 @@ export type Success<T> = { readonly status: 200 | 201; readonly body: T }
  * handler into an `async` wrapper. Both spellings are pinned in
  * `handler.type-assertions.ts`.
  *
- * The authenticated variant is not here. It arrives with the authenticator, at the step
- * that builds JWT verification — see docs/divergences.md § Slice 1.
+ * `authedHandler` below wraps this rather than replacing it, so everything stated here
+ * holds for an authenticated route too.
  */
 export const publicHandler = <S extends object, T>(
   responseSchema: S,
@@ -67,3 +68,50 @@ export const publicHandler = <S extends object, T>(
       )
   }
 }
+
+/**
+ * `Bearer ` exactly, and the token is whatever follows. A missing header, a `Basic` one and
+ * a `Bearer` with nothing after it are all the same 401 as a token that fails to verify —
+ * see `unauthenticated` in `src/domain/errors.ts` for why none of them may say more.
+ */
+const BEARER = /^Bearer (.+)$/
+
+const bearerTokenRz = (req: Request): Result<string, DomainError> => {
+  const token = BEARER.exec(req.get('authorization') ?? '')?.[1]
+
+  return token === undefined ? err(unauthenticated({ reason: 'NoBearerToken' })) : ok(token)
+}
+
+/**
+ * Every route except signup and login.
+ *
+ * IT WRAPS `publicHandler` RATHER THAN REPLACING IT, and that is the decision worth
+ * knowing. Two sibling adapters would mean the egress check lives in one of them, and
+ * registering a route with the wrong one would silently opt out of the mechanism behind
+ * "no persistence entity and no password hash ever reaches a response body". Here there is
+ * no second path to `res` at all: this function's only way to answer a request is through
+ * the one above.
+ *
+ * AUTHENTICATION RUNS INSIDE THE ADAPTER, which is what makes the handler signature
+ * `(userId, req)` rather than `(req)`. A handler cannot run before a token has verified,
+ * because the adapter has not called it yet; and it cannot ask "who is this" and get no
+ * answer, because `userId` is a `string` parameter rather than something optional it might
+ * forget to check. Writing a route that is authenticated in name only is not discouraged
+ * here, it is unrepresentable — tried, and pinned in `handler.type-assertions.ts`.
+ *
+ * The `userId` a handler receives is the `sub` claim of a verified token and never a path
+ * parameter, which is the half of section 3's ownership invariant this file owns. Comparing
+ * it against the resource is the service layer's, and arrives with the first route that
+ * resolves one.
+ */
+export const authedHandler = <S extends object, T>(
+  responseSchema: S,
+  fn: (userId: string, req: Request) => PromiseLike<Result<Success<T>, DomainError>>,
+): RequestHandler =>
+  publicHandler(responseSchema, async (req) => {
+    const userIdRz = await bearerTokenRz(req).asyncAndThen(verify_tokenRzA)
+
+    // Short-circuits: `fn` is not called at all on a failed authentication, so a handler
+    // has no unauthenticated path to be careful on.
+    return userIdRz.isErr() ? err(userIdRz.error) : fn(userIdRz.value, req)
+  })

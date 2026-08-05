@@ -8,6 +8,20 @@
  * a disclosure.
  */
 
+/**
+ * `additionalProperties: false` is load-bearing here for the same reason as below, against
+ * a different leak: the service that mints this body is one field away from the credential
+ * row it authenticated against.
+ */
+export const tokenResponseSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['token'],
+  properties: {
+    token: { type: 'string' },
+  },
+} as const
+
 export const userResponseSchema = {
   type: 'object',
   additionalProperties: false,
