@@ -50,15 +50,16 @@ absent by decision, and the reasoning is entry R2.
 | R21 | Errors log at construction, which is not the same as at occurrence | Low | Only if future code builds and discards |
 | R22 | Correlation ids are not accepted from upstream callers | Low | n/a — single service |
 | R23 | Every response body is serialised twice | Low | Certain, immaterial at this scale |
-| R24 | The payload-logging ban has one permitted constructor, which is also the catch-all | Low | Only via future call sites |
-| R25 | Log record keys can be attacker-controlled via the JWT payload path | Low | Harmless with a JSON sink |
+| R24 | The payload-logging ban guards one key name, and one constructor is exempt | Low | Only via future call sites |
+| R25 | Log record values can be attacker-controlled, via any rejected field name | Low | Certain, and harmless with a JSON sink |
 | R26 | Validators compile at module load, not ahead of time | Low here, blocking elsewhere | Certain — a capability not present |
 | R27 | The commit gate is local, opt-in per clone, and checks the working tree | Low | Certain on a fresh clone |
 | R28 | The Result naming rule sees bindings, not every position a `Result` can occupy | Low | On the first `Result`-typed class property |
-| R29 | `allErrors: true` makes validation effort scale with how invalid a body is | Low | Bounded only by an unstated body-size default |
+| R29 | `allErrors: true` makes validation effort scale with how invalid a body is | Low | Bounded by a stated body-size limit |
 | R30 | The published request schemas describe something looser than the service enforces | Medium | Certain for any client generated from the specification |
 | R31 | The test suite resets once per run, not between test files or tests | Low now, Medium from step 2 | Certain once two files write the same table |
 | R32 | Local development credentials are committed in `compose.yml` | Low | Only if the values are reused outside a developer machine |
+| R33 | The log sink has no level threshold, and every error logs | Low now, Medium under real traffic | Certain — an unmatched-route scan is enough |
 
 ---
 
@@ -311,13 +312,17 @@ performs the only decimal-to-integer conversion in the codebase and re-checks th
 property, so conversion cannot happen without validation. The service keeps
 `toPennies`' rejection branch behind the keyword as belt-and-braces.
 
-**What it costs.** The property is stated twice, so the two could in principle drift.
-There is also a registration-ordering dependency: the keyword must be registered on the
-Ajv instance before any module-level schema constant compiles.
+**What it costs.** A registration-ordering dependency: the keyword must be registered on
+the Ajv instance before any module-level schema constant compiles.
 
-**How you would trigger it.** Change the tolerance in one place and not the other.
-Separately, register the keyword late — in a test file rather than beside the Ajv
-instance — and the production path throws
+**Corrected once it was built.** This entry previously said the two mechanisms could
+drift, because the property was stated twice. They cannot: both call one exported
+predicate, `isWithinScale`, so the property is *asserted* in two places and *implemented*
+in one. Changing the tolerance changes both. What survives is the ordering dependency
+below, which is the real cost.
+
+**How you would trigger it.** Register the keyword late — in a test file rather than
+beside the Ajv instance — and the production path throws
 `strict mode: unknown keyword: "currencyScale"` at startup.
 
 **Why both, rather than one.** They do different jobs. The keyword is what makes the
@@ -703,49 +708,82 @@ them.
 
 ---
 
-## R24 — The payload-logging ban has one permitted constructor, which is also the catch-all
+## R24 — The payload-logging ban guards one key name, and one constructor is exempt
 
 **Chosen.** Request bodies are never logged, and this is enforced by the type
 system rather than by memory: the log-only parameter is declared
-`PayloadForbidden = LogOnly & { readonly payload?: never }` on six of the seven
-error constructors, so re-adding a payload is a compile error. The asymmetry is
+`PayloadForbidden = LogFields & { readonly payload?: never }` on every error
+constructor a client's input can reach, so re-adding a payload is a compile error.
+Verified in both directions in `src/domain/errors.type-assertions.ts`, which fails
+the build if either the ban or the exception stops behaving. The asymmetry is
 carried by which constructor a call site reaches for — ingress failures go through
 `validationFailed` and cannot carry a payload; egress failures go through
 `unexpected` and can, because that body is the service's own output.
 
-**What it costs.** `unexpected` has to permit a payload for the egress case, and it
-is simultaneously the generic translation target for any thrown error. So the ban
-is structural for every path that exists today and conventional for paths that do
-not yet exist.
+**What it costs, measured rather than described.** The guard is a denylist of one key
+name, so it stops the defect it was written for and nothing adjacent to it:
 
-**How you would trigger it.** Catch a throw somewhere that has a client body in
-scope and pass it to `unexpected` as log-only data. It compiles, and a request
-payload reaches the log again.
+| What a call site writes | Result |
+|---|---|
+| `{ payload: body }` | rejected |
+| `{ payload: body }` via a variable | rejected |
+| `{ body: body }` | **compiles** |
+| `{ requestBody: … }`, `{ data: … }`, `{ input: … }` | **compiles** |
+| `{ ...body }` | **compiles** |
 
-**What closes it.** A dedicated constructor for egress-schema failures, so
-`unexpected` can forbid payloads like the other six; or a branded type such that
-only the egress check can construct a loggable payload. Perhaps twenty minutes.
-Not taken because every current call site is correct and the branding adds a
-concept for a hole nothing is standing in — but the hole is real and it is the
-right kind of thing to have named rather than discovered.
+The spread is the worst case, because every field of the body arrives under its own
+name. All three accepting rows are pinned in `src/domain/errors.type-assertions.ts`, so
+the boundary is recorded rather than rediscovered.
+
+Separately, `unexpected` has to permit a payload for the egress case and is
+simultaneously the generic translation target for any thrown error, so even the one
+guarded key is unguarded there.
+
+**What this means for the section 3 invariant.** "No credential and no request-body
+value ever reaches a log record" is listed as mechanised. It holds today, but what
+makes it hold is not this type — it is that the constructors compose their own log
+fields from Ajv's error metadata, which is names without values, and that no call site
+passes a body. The type mechanises the *regression*, not the invariant.
+
+**How you would trigger it.** Log a request body under any key other than `payload`, or
+spread it. Or catch a throw with a client body in scope and pass it to `unexpected`.
+
+**What closes it.** An allowlist of loggable fields — a closed set of permitted key
+names with narrow value types, and no index signature — at which point
+`PayloadForbidden` is deleted rather than extended, and the asymmetry above is expressed
+as a widened allowlist for `unexpected` rather than as an exemption.
+
+**Its cost was overestimated when it was deferred.** The design called an allowlist "a
+larger piece of work"; measured against the same five cases it rejects all three
+accepting rows, accepts what is meant to go, and is a net deletion of about fifteen
+lines. One hole survives it: a *variable* mixing a permitted key with a forbidden one
+passes, because excess-property checking only fires on fresh object literals. So it is a
+large improvement rather than a closure, which is part of why it was still not taken —
+that, and it lands in the middle of a slice under review. It is the next thing to do
+here.
 
 ---
 
-## R25 — Log record keys can be attacker-controlled via the JWT payload path
+## R25 — Log record values can be attacker-controlled, via any rejected field name
 
-**Chosen.** In place of the request body, validation failures log
-`payloadKeys: Object.keys(body)` — field names without values, no recursion. The
-same funnel validates the decoded JWT payload, so that path reaches the same
-function.
+**Chosen.** In place of the request body, validation failures log `invalidFields` —
+the field names Ajv reported, without values and without recursion.
 
-**What it costs.** A decoded JWT payload is attacker-supplied structure, so an
-attacker can cause arbitrary strings to appear as *keys* in a log record. No values
-are exposed and nothing is forged, because the sink emits JSON and
-`JSON.stringify` escapes key content.
+**Corrected once it was built.** This entry was written from the design and named the
+wrong route. It said the exposure arrives with the JWT payload path, via
+`Object.keys(body)`. Neither half holds: the field names come from Ajv's own error
+objects rather than from the body's keys, and the exposure is **live today** rather
+than pending, because Ajv names the offending property when an unknown key is
+rejected. A request carrying `{"<script>": 1}` puts that string into a log record now.
+The same names already reach the client in `details[].field`, which is what makes this
+a logging concern rather than a disclosure one.
 
-**How you would trigger it.** Present a token whose payload carries keys chosen to
-look like log fields, and observe them in the record for the resulting validation
-failure.
+**What it costs.** Arbitrary attacker-chosen strings appear as *values* in a log
+record. No request values are exposed and nothing is forged, because the sink emits
+JSON and `JSON.stringify` escapes them.
+
+**How you would trigger it.** Post a body whose unknown key is chosen to look like a
+log field, and read the record for the resulting validation failure.
 
 **What closes it.** Nothing is needed while the sink emits JSON. It becomes a real
 log-injection vector the moment the sink is line-oriented plaintext — which a
@@ -980,20 +1018,23 @@ possible — a few thousand unknown keys against a schema with
 `additionalProperties: false` — and every one is collected rather than the first
 ending the check. Repeat concurrently.
 
-**What actually bounds it today, and this is the part worth recording.** The request
-body size limit, which is **inherited rather than chosen**: `express.json()` defaults
-to 100kb, and nothing in this repository sets it, asserts it, or mentions it. So the
-protection is real but nobody here decided on it, which means nobody would notice it
-changing — a future `express.json({ limit: '10mb' })` added for an unrelated reason
-would widen this hundredfold, silently, with no test objecting.
+**What bounded it when this entry was written.** The request body size limit,
+**inherited rather than chosen**: `express.json()` defaults to 100kb and nothing set,
+asserted or mentioned it. The protection was real but undecided, so a future
+`express.json({ limit: '10mb' })` added for an unrelated reason would have widened it
+hundredfold with no test objecting.
 
-**What closes it.** Set the limit explicitly at the point `express.json()` is
-registered, with a comment tying it to this entry, and add a test asserting that an
-oversized body is rejected with 413 rather than parsed. That converts an inherited
-default into a stated decision. Ten minutes. The heavier alternative — validating
-fail-fast and re-running with `allErrors` only to build the response body — trades a
-second validation pass on the failure path for the guarantee, and is not worth it at
-this scale.
+**Taken, at the error-envelope slice.** The limit is now stated —
+`express.json({ limit: '16kb' })` in the composition root — and an oversized body is
+asserted to be rejected rather than parsed. One difference from the closure proposed
+here: it is rejected with **400, not 413**, because the specification publishes no 413
+and the envelope is the same one every other client error renders through. The
+`details` entry names the limit as the offending constraint.
+
+**What remains.** Only the heavier alternative — validating fail-fast and re-running
+with `allErrors` purely to build the response body — which trades a second validation
+pass on every failure for a guarantee that the size limit already provides at this
+scale. Not worth it.
 
 **Not to be confused with R26.** That entry is about Ajv generating code from
 *schemas*; this one is about Ajv doing unbounded work on *data*. Different mechanism,
@@ -1110,3 +1151,36 @@ drift from the default in code, for no gain over having the default in code. The
 closure is not to remove these but to make the boundary explicit: the signing key at step 3
 is generated per run in development and read from the environment everywhere else, with no
 committed fallback, and this entry is the reason that asymmetry exists.
+
+---
+
+## R33 — The log sink has no level threshold, and every error logs
+
+**Chosen.** `log()` writes every record it is given. There is no threshold, no
+sampling and no way to raise the floor without changing code, and log-at-construction
+means every error that exists produces a record by design.
+
+**What it costs.** Log volume is a function of how badly clients behave, which is not
+something this service controls. The 404 fallback is the sharpest case: an unmatched
+route is an ordinary client mistake logged at `info`, so anything scanning for
+`/wp-admin` writes a record per probe. At real traffic the cost is storage and
+ingestion spend rather than correctness, and the records that matter get harder to
+find among the ones that do not.
+
+**How you would trigger it.** Point any path scanner at the service, or send a
+malformed body in a loop. Both are unauthenticated paths that log before anything
+rejects them.
+
+**What closes it.** A level threshold read from the environment, which is four lines
+and the conventional shape — `LOG_LEVEL=warn` in production would drop the whole 4xx
+stream. It is not built because nothing here consumes it: there is no deployment, no
+collector, and no measured volume to tune against, so the threshold would be a
+configuration knob whose correct value is unknown and whose behaviour nothing asserts.
+The related decision worth naming is that dropping `info` in production also drops the
+detail record for every client error, leaving only the outcome record from the
+renderer — which is a deliberate trade to make once, not a default to inherit.
+
+**Not to be confused with R21.** That entry is about errors being logged at
+construction rather than at occurrence, which is a question of *when* a record is
+written. This one is about how many are written and whether anything can turn them
+down.
