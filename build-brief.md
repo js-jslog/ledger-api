@@ -1383,21 +1383,7 @@ which section 3 invariants could move to deterministic tooling and which cannot.
 - **Visibility:** public as required
 - **The probe branches stay, and are referenced deliberately.** Decided in rev 5.
   Both `probe-ledger-api-brief` and `probe-ledger-api-brief-2nd-run` are public on
-  the repository that will be submitted, and the second's `README.md` and
-  `FINDINGS.md` contain "take-home", "interview", "pair-coding session" and "the
-  real 12-hour build". No company name and no "Eagle Bank", so this is not a
-  disclosure problem — but it _is_ a partial exception to the bullet above, taken
-  knowingly because the methodology is the strongest thing in the submission and
-  hiding the evidence for it would be perverse. Two requirements follow:
-  - **The README links them**, under a short heading, so the reviewer finds them
-    on purpose rather than by wandering. Being seen to have hidden them is the
-    only genuinely bad outcome here.
-  - **Scrub the exercise-identifying phrases** from `FINDINGS.md` and the probe
-    `README.md` before submission — "take-home", "interview", "pair-coding
-    session", "the real 12-hour build", "a take-home will never collide". Every
-    one has a neutral rewrite ("the build", "the review session", "at this
-    scale") that costs nothing and loses no meaning. The methodology survives the
-    scrub entirely; only the searchability goes.
+  the repository that will be submitted
 - `pnpm-lock.yaml` **and** `pnpm-workspace.yaml` committed — the second is not
   optional, it is what stops `F1` reaching the reviewer.
   `pnpm install --frozen-lockfile` in CI with `pnpm audit` as a separate step.
