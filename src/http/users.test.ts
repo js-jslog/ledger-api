@@ -154,6 +154,111 @@ describe('POST /v1/users', () => {
   })
 })
 
+const register = async (body: object = signup): Promise<string> => {
+  const response = await request(app).post('/v1/users').send(body)
+
+  return bodyOf(response)['id'] as string
+}
+
+const tokenFor = async (body: object): Promise<string> => {
+  const response = await request(app).post('/v1/auth/login').send(body)
+
+  return bodyOf(response)['token'] as string
+}
+
+const fetchAs = (token: string, userId: string): request.Test =>
+  request(app).get(`/v1/users/${userId}`).set('authorization', `Bearer ${token}`)
+
+const other = {
+  ...signup,
+  name: 'Other User',
+  email: 'other@example.com',
+  password: 'a completely different password',
+}
+
+describe('GET /v1/users/{userId}', () => {
+  test('returns the authenticated user their own details', async () => {
+    const userId = await register()
+    const token = await tokenFor({ email: signup.email, password: signup.password })
+
+    const response = await fetchAs(token, userId)
+
+    expect(response.status).toBe(200)
+    expect(bodyOf(response)).toMatchObject({
+      id: userId,
+      name: 'Test User',
+      email: 'test@example.com',
+      phoneNumber: '+441234567890',
+    })
+  })
+
+  test('never returns the password hash', async () => {
+    const userId = await register()
+    const token = await tokenFor({ email: signup.email, password: signup.password })
+
+    const response = await fetchAs(token, userId)
+
+    expect(response.text).not.toMatch(/\$2[aby]\$/)
+    expect(Object.keys(bodyOf(response)).sort()).toEqual([
+      'address',
+      'createdTimestamp',
+      'email',
+      'id',
+      'name',
+      'phoneNumber',
+      'updatedTimestamp',
+    ])
+  })
+
+  test('answers 403 for a user id belonging to somebody else', async () => {
+    const otherId = await register(other)
+    await register()
+    const token = await tokenFor({ email: signup.email, password: signup.password })
+
+    const response = await fetchAs(token, otherId)
+
+    expect(response.status).toBe(403)
+    expect(bodyOf(response)['message']).toBe('You are not allowed to access this user')
+  })
+
+  /**
+   * The test that tells resolve-then-authorise apart from authorise-alone. Comparing the
+   * path parameter against the token without going to the database answers 403 here, which
+   * looks like a stricter version of the same thing and is a departure from a written
+   * scenario. Nothing else in this file fails if the order is reversed.
+   */
+  test('answers 404 for a well-formed user id that does not exist', async () => {
+    await register()
+    const token = await tokenFor({ email: signup.email, password: signup.password })
+
+    const response = await fetchAs(token, 'usr-0123456789abcdef')
+
+    expect(response.status).toBe(404)
+    expect(bodyOf(response)['message']).toBe('User was not found')
+  })
+
+  test('answers 400 when the user id cannot be one', async () => {
+    await register()
+    const token = await tokenFor({ email: signup.email, password: signup.password })
+
+    const response = await fetchAs(token, 'not-a-user-id')
+
+    expect(response.status).toBe(400)
+    expect(bodyOf(response)['details']).toContainEqual({
+      field: 'userId',
+      message: 'must match pattern "^usr-[A-Za-z0-9]+$"',
+      type: 'pattern',
+    })
+  })
+
+  test('answers 401 with no token, before it has an opinion about the user id', async () => {
+    const response = await request(app).get('/v1/users/not-a-user-id')
+
+    expect(response.status).toBe(401)
+    expect(bodyOf(response)['message']).toBe('Authentication failed')
+  })
+})
+
 /**
  * The claim section 8c makes for egress validation, tested by breaking it on purpose.
  *
@@ -175,6 +280,7 @@ describe('a service that leaks a persistence row', () => {
       '/v1/users',
       createUser({
         signup_userRzA: () => okAsync(body as UserResponseBody),
+        fetch_userRzA: () => okAsync(body as UserResponseBody),
       } satisfies UsersService),
     )
     app.use(notFoundFallback)

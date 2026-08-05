@@ -86,3 +86,28 @@ export const loginSchema = {
     password: { type: 'string' },
   },
 } as const
+
+/**
+ * The fifth ingress point. A path parameter is client input like any other, and it goes
+ * through the same funnel rather than being passed to a repository because Express handed
+ * it over as a `string`.
+ *
+ * WHY IT IS VALIDATED AT ALL, rather than left to miss and answer 404. The published
+ * document puts a `pattern` on the parameter and a `400` on an operation that has no
+ * request body — so the path parameter is the only thing that `400` can describe.
+ * `docs/spec-changes.md` § 4 already reasons from that reading: it calls the truncated
+ * `^tan-[A-Za-z0-9]$` a defect precisely because the endpoint would answer 400 to requests
+ * that should succeed.
+ *
+ * It is `req.params` as a whole rather than the string, so that Ajv reports the failure
+ * against the parameter's name — `userId`, not `body` — which is what the 400's `details`
+ * array is for.
+ */
+export const userParamsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['userId'],
+  properties: {
+    userId: { type: 'string', pattern: '^usr-[A-Za-z0-9]+$' },
+  },
+} as const

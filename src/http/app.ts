@@ -9,7 +9,7 @@ import { usersService } from '../service/users.js'
 import { login } from './auth.js'
 import { errorMiddleware, notFoundFallback } from './error-middleware.js'
 import { health } from './health.js'
-import { createUser } from './users.js'
+import { createUser, fetchUser } from './users.js'
 
 /**
  * The composition root. Every route this service answers is registered here, one line
@@ -39,6 +39,7 @@ export const createApp = (db: Kysely<Database>): Express => {
   app.get('/health', health)
   app.post('/v1/users', createUser(users))
   app.post('/v1/auth/login', login(auth))
+  app.get('/v1/users/:userId', fetchUser(users))
 
   // After every route, in this order. `notFoundFallback` takes no path argument: under
   // path-to-regexp v8 both `app.use('*')` and `app.all('*')` throw at startup.

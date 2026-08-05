@@ -29,6 +29,11 @@ type Unauthenticated = {
   readonly message: string
 }
 
+type Forbidden = {
+  readonly kind: 'Forbidden'
+  readonly message: string
+}
+
 type Unexpected = {
   readonly kind: 'Unexpected'
   readonly message: string
@@ -39,6 +44,7 @@ export type DomainError = { readonly correlationId: string } & (
   | NotFound
   | AlreadyExists
   | Unauthenticated
+  | Forbidden
   | Unexpected
 )
 
@@ -88,6 +94,7 @@ const LEVELS: Record<DomainError['kind'], Level> = {
   NotFound: 'info',
   AlreadyExists: 'info',
   Unauthenticated: 'info',
+  Forbidden: 'info',
   Unexpected: 'error',
 }
 
@@ -131,6 +138,9 @@ export const alreadyExists = (message: string, fields: PayloadForbidden = {}): D
  */
 export const unauthenticated = (fields: PayloadForbidden = {}): DomainError =>
   born({ kind: 'Unauthenticated', message: 'Authentication failed' }, fields)
+
+export const forbidden = (message: string, fields: PayloadForbidden = {}): DomainError =>
+  born({ kind: 'Forbidden', message }, fields)
 
 const describeCause = (cause: unknown): LogFields =>
   cause instanceof Error

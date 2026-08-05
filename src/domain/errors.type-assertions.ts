@@ -8,7 +8,7 @@
  * because egress validation will hand it a body that failed its own published schema and
  * that body is the entire diagnostic. R24 records what that costs.
  */
-import { notFound, unexpected, validationFailed } from './errors.js'
+import { forbidden, notFound, unexpected, validationFailed } from './errors.js'
 
 // ── Forbidden, on every constructor a client's input can reach ───────────────────
 
@@ -20,6 +20,11 @@ validationFailed('Invalid request body', [], {
 notFound('Resource not found', {
   // @ts-expect-error -- same ban, and it is the parameter type rather than a review rule.
   payload: { accountNumber: '01234567' },
+})
+
+forbidden('Resource belongs to another user', {
+  // @ts-expect-error -- reached with a path parameter, so it is one of the constructors client input touches.
+  payload: { userId: 'usr-0123456789abcdef' },
 })
 
 // ── Permitted, and deliberately so ──────────────────────────────────────────────

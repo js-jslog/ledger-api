@@ -1,8 +1,8 @@
-import { sql, type Kysely } from 'kysely'
+import { sql, type Kysely, type Selectable } from 'kysely'
 import { ResultAsync } from 'neverthrow'
 
 import { alreadyExists, unexpected, type DomainError } from '../domain/errors.js'
-import type { Database } from '../db/schema.js'
+import type { Database, UsersTable } from '../db/schema.js'
 
 export type Address = {
   readonly line1: string
@@ -64,6 +64,7 @@ export type Credentials = {
  */
 export type UsersRepository = {
   readonly create_userRzA: (user: NewUser) => ResultAsync<UserRecord, DomainError>
+  readonly find_userByIdRzA: (id: string) => ResultAsync<UserRecord | undefined, DomainError>
   readonly find_credentialsByEmailRzA: (
     email: string,
   ) => ResultAsync<Credentials | undefined, DomainError>
@@ -102,6 +103,27 @@ const toDomainError = (cause: unknown): DomainError =>
  */
 const optional = (value: string | null): string | undefined => value ?? undefined
 
+/**
+ * The column-to-field mapping, in one place because two callers now return this shape and
+ * a second copy is a second thing to update when a column is added.
+ */
+const toUserRecord = (row: Selectable<UsersTable>): UserRecord => ({
+  id: row.id,
+  name: row.name,
+  address: {
+    line1: row.address_line1,
+    line2: optional(row.address_line2),
+    line3: optional(row.address_line3),
+    town: row.address_town,
+    county: row.address_county,
+    postcode: row.address_postcode,
+  },
+  phoneNumber: row.phone_number,
+  email: row.email,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+})
+
 export const usersRepository = (db: Kysely<Database>): UsersRepository => ({
   create_userRzA: (user) =>
     ResultAsync.fromPromise(
@@ -123,22 +145,22 @@ export const usersRepository = (db: Kysely<Database>): UsersRepository => ({
         .returningAll()
         .executeTakeFirstOrThrow(),
       toDomainError,
-    ).map((row) => ({
-      id: row.id,
-      name: row.name,
-      address: {
-        line1: row.address_line1,
-        line2: optional(row.address_line2),
-        line3: optional(row.address_line3),
-        town: row.address_town,
-        county: row.address_county,
-        postcode: row.address_postcode,
-      },
-      phoneNumber: row.phone_number,
-      email: row.email,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    })),
+    ).map(toUserRecord),
+
+  /**
+   * `undefined` for a missing row rather than an error, like the credentials lookup above.
+   * A repository reports what it found; which status that deserves is the service's
+   * decision, and here it is not the same one — a user this caller does not own resolves
+   * perfectly well and still must not be returned.
+   *
+   * `selectAll` rather than a column list, because `toUserRecord` needs every column and a
+   * list would be a second place to update when one is added.
+   */
+  find_userByIdRzA: (id) =>
+    ResultAsync.fromPromise(
+      db.selectFrom('users').selectAll().where('id', '=', id).executeTakeFirst(),
+      unexpected,
+    ).map((row) => (row === undefined ? undefined : toUserRecord(row))),
 
   /**
    * `lower(email)` on both sides, which is a forward obligation of storing the address as
