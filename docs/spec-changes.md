@@ -237,8 +237,37 @@ Note that `additionalProperties: false` is *not* inherited by nested objects. Th
 `{ "line1": "x", "isAdmin": true }` would validate.
 
 The error schemas — `ErrorResponse` and `BadRequestErrorResponse` — are deliberately left
-open. They are not on the egress-validation path, and a correlation id is expected to
-extend them; closing them now would publish a shape that is about to change.
+open. They are not on the egress-validation path, and the correlation id below extends
+them; closing them would publish a shape a future member of the union could need to
+change.
+
+### `correlationId` on both error schemas
+
+Every error envelope this service renders carries a `correlationId`, and it is published
+as `required` on `ErrorResponse` and `BadRequestErrorResponse` because it is always
+present rather than sometimes.
+
+**It was already conformant before being published**, which is why this is an addition
+rather than a correction: neither schema sets `additionalProperties: false`, so JSON
+Schema's open-by-default rule permits the extra field. Publishing it anyway is the same
+standard R30 holds the request schemas to — a document that under-describes what an
+endpoint actually returns is the criticism this project makes of the supplied one.
+
+It is the reason the id leaves the process at all. A user reporting a failure can quote
+one string, and it selects every log record for that request.
+
+### The `x-correlation-id` response header, which is returned but not published
+
+The same id is set as a response header on **every** response, including successful ones,
+which is the half the envelope cannot cover — a request that succeeded slowly has nothing
+to quote otherwise.
+
+It is deliberately not added to the document. OpenAPI 3.1 has no way to declare a header
+that every response carries: `headers` is a property of each response object, so
+publishing this one means adding it to roughly forty of them, by hand, with nothing
+keeping them in step afterwards. That is a large edit whose only failure mode is silent
+drift. The field on the error envelope is the published contract; the header is a
+convenience that costs a client nothing to ignore.
 
 ### `GET /health`, which is the one addition deliberately *not* made to the document
 

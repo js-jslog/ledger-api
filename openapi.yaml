@@ -982,17 +982,27 @@ components:
       type: object
       required:
         - message
+        - correlationId
       properties:
         message:
           type: string
+        correlationId:
+          type: string
+          format: uuid
+          description: "Identifies this request in the service logs. Quote it in a support request."
     BadRequestErrorResponse:
       type: object
       required:
         - message
         - details
+        - correlationId
       properties:
         message:
           type: string
+        correlationId:
+          type: string
+          format: uuid
+          description: "Identifies this request in the service logs. Quote it in a support request."
         details:
           type: array
           items:
