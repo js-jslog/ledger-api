@@ -148,6 +148,18 @@ a glob in `vitest.config.ts` only created a second copy to go stale.
 own 22 cases" — both were wrong within a commit or two of being written. If the count
 matters, compute it; if it does not, leave it out.
 
+### Before commenting a config option, flip it
+
+If a test fails when you flip it, the comment is redundant — the mechanism already says
+what the prose would have said. If nothing fails, the option needs a test rather than a
+paragraph.
+
+This has paid twice. Flipping two `globalSetup` entries deleted most of a comment *and*
+revealed a genuine gap that nothing covered. And a guard against a supposedly silent
+failure was written, adopted, then deleted once measured, because every reachable failure
+was already loud — the tests that remain exist to justify its absence. An argued omission
+beats an unexamined defence.
+
 ### The counter-example, which is what makes the rule discriminating
 
 `argsIgnorePattern: '^_'` keeps its comment and deserves to. The comment claims only
@@ -191,3 +203,96 @@ are now loud, where neither was when the comment was written. It is left in plac
 than deleted, because its claim is prospective — it is about any function whose arity is
 part of its contract, including ones no test will exercise — and because deleting it is a
 change to a slice already reviewed.
+
+---
+
+## Evidence: absence of an error is not evidence
+
+**A rule that reports nothing is indistinguishable from a rule that is switched off.**
+Before concluding that a check holds, make it fail: write the line that ought to be
+rejected, watch the rejection, then remove it. Several mechanisms here are verified in
+both directions for exactly this reason — the naming rule, the schema-inference assertion
+and the payload ban each pin a failing case alongside a passing one.
+
+**A claim in a document is worth testing too, including a claim in this one.** The
+counter-example above survives because it was tested and found wrong in its most important
+clause. A convention nobody has checked is one that is true until someone looks.
+
+---
+
+## Staging: machinery arrives with the step that consumes it
+
+A module with no caller is not obviously wrong, which is what makes this a convention
+rather than something a compiler settles. The question is not *does anything call it yet* —
+plenty of correct code has a caller that arrives later. It is:
+
+> **Would later work change its shape?**
+
+If it would, building now means inventing a placeholder for a decision not yet taken, and
+then having the real thing bend to fit it. If it would not, building now is free, and
+sometimes better than free, because the alternative is doing it in a step that already has
+enough happening.
+
+Both answers are live here. `toPennies` was written before anything called it: its
+behaviour is fixed by a published two-decimal-place rule and verified across every legal
+amount, so nothing downstream can revise it. The authenticated half of the handler adapter
+was deliberately *not* written ahead of the authenticator, because every one of its
+parameter types is decided by code that did not exist yet.
+
+**The safety condition is that the deferral is loud.** Deferring an error kind is safe
+because the tables keyed on the union make adding one a compile error naming the missing
+member. Where a deferral would instead be silent — where the thing simply never happens
+and nothing reports it — build it now.
+
+---
+
+## Tests: a test may not assert structure into existence
+
+A test posting to `/v1/users` before that route exists will pass, because body parsing
+happens before routing and the path is never matched. It is still wrong: anyone reading
+the suite concludes the endpoint is there.
+
+This is the test-shaped version of the staging rule above, and it is the quieter of the
+two. Unbuilt production machinery is at least visible as an export with no caller; an
+unbuilt endpoint named in a passing test looks exactly like a built one.
+
+**Use a path that is obviously not a route** wherever the path is incidental to what is
+under test. It usually sharpens the claim rather than weakening it — asserting that a
+malformed body is rejected at `/no-such-route` says the parser runs before routing, which
+is the stronger property.
+
+---
+
+## Configuration: environment variables with defaults, and one value with none
+
+Configurable values are read where they are used, through a function taking `env` with a
+committed default — `src/db/connection.ts` is the pattern. There is no configuration
+module; with three such values there is nothing for one to centralise.
+
+**Never branch on `NODE_ENV === 'test'`.** A value that must differ under test belongs in
+an environment variable the test runner sets, not in a branch. A branch means the code the
+suite exercises is not the code that runs, and exercising the second one is the suite's
+entire purpose. `BCRYPT_COST` is where this tempts, since the cost genuinely must be lower
+under test.
+
+**There is no `.env` and no `.env.example`.** A connection string living only in an ignored
+file is a string a fresh clone does not have, and an example file is a second copy of that
+string, free to drift from the default in code. **R32** carries the reasoning, and the one
+value none of this applies to.
+
+---
+
+## History: what a commit carries
+
+**Only what the diff and the touched documents do not** — why now, what the act was, and
+any departure from plan. A message that is nothing but a subject line is a legitimate
+outcome of that rule rather than a lazy one, and several here are.
+
+Subjects are plain imperative, with no `feat:`/`docs:` prefix and no trailers.
+
+**Files arrive in final form.** A rename is never staged through an intermediate state, so
+history contains no name that was never used.
+
+**The full test suite runs in `pre-commit`, deliberately.** It needs Postgres running, from
+the migration slice onward. The cost is seconds, and the alternative is committing
+something that does not build.
