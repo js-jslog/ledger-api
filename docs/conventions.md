@@ -166,3 +166,28 @@ when there is a handler.
 
 The distinction is not length, and it is not subject matter. It is whether the machine
 will tell you.
+
+### The handler now exists, and the reserved comment was not owed
+
+The paragraph above reserved a comment for the error handler on the grounds that the
+breakage would be silent. **Measured at the error-envelope slice, by deleting the fourth
+parameter and running everything:**
+
+| Check | What it said |
+|---|---|
+| `pnpm typecheck` | nothing — a three-parameter function is assignable to `ErrorRequestHandler`, so the annotation does not carry arity |
+| `pnpm lint` | nothing |
+| `pnpm test` | **seven failures**, one of them printing the HTML stack trace with absolute paths that the demotion reinstates |
+
+So the breakage is silent to the tooling and loud in the suite. By the rule at the top of
+this section the comment is redundant, and it was not written. The tests that cover the
+error path are what stand in its place, which is the better outcome — an assertion cannot
+go stale the way a sentence can.
+
+**One thing this leaves open rather than settles.** It also weakens the case for the
+`argsIgnorePattern` comment itself: removing that option makes `pnpm lint` fail naming
+`_req` and `_next`, and taking the linter's advice from there fails the suite. Both steps
+are now loud, where neither was when the comment was written. It is left in place rather
+than deleted, because its claim is prospective — it is about any function whose arity is
+part of its contract, including ones no test will exercise — and because deleting it is a
+change to a slice already reviewed.

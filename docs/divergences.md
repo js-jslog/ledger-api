@@ -566,3 +566,167 @@ README tells a reviewer that this path needs nothing but Node and pnpm; `rm -rf`
 that false on Windows. Note that `runcontainer.ps1` does not settle it — it only ever runs
 `devcontainer up`, so scripts written here always execute in bash, and it is the
 reviewer's shell rather than the author's that the portable spelling is for.
+
+---
+
+## Slice 1 — the error envelope
+
+### Claim under test
+
+> An Express error handler is recognised purely by having four parameters, so deleting
+> the unused one silently turns it into ordinary middleware — it still compiles, still
+> lints, and the run goes green.
+
+**Falsified, in its last clause, and that is the clause the whole claim rested on.**
+Measured by deleting `_next` from `errorMiddleware` and running everything:
+
+| Check | What it said |
+|---|---|
+| `pnpm typecheck` | nothing. A three-parameter function is assignable to `ErrorRequestHandler`, so the annotation does not carry arity |
+| `pnpm lint` | nothing |
+| `pnpm test` | **seven failures**, one of them printing the HTML page with a stack trace and absolute filesystem paths |
+
+So the tooling is silent exactly as predicted, and the suite is not. `docs/conventions.md`
+had reserved a comment beside the handler for this consequence; the measurement says it is
+not owed, and it was not written. The tests that cover the error path stand in its place,
+which is the better outcome — an assertion cannot go stale the way a sentence can. The
+reservation in `conventions.md` has been amended to record the result, including what it
+leaves open about the `argsIgnorePattern` comment itself.
+
+### Second claim under test
+
+> §8a's adapter makes "every `Result` is handled" a compile-time property at the boundary.
+
+**Negative — it holds — and it is now pinned rather than measured.** A one-off measurement
+would have proved it for one afternoon, so it went into `handler.type-assertions.ts`
+instead, where each `@ts-expect-error` fails the build if the error it names stops being
+produced. Four failures are pinned: a handler returning a bare body rather than a
+`Result`, one widening its error channel past the closed union, one dropping the status,
+and one using a status this API does not publish.
+
+**And attempting it produced a correction to §8a's signature.** The literal
+`Promise<Result<Success<T>, DomainError>>` does not accept `ResultAsync`, which is
+thenable but has no `catch` or `finally` — so the parameter as designed rejects the one
+shape a service layer naturally returns and forces every handler into an `async` wrapper.
+`PromiseLike` accepts both, and both spellings are pinned so that narrowing it back cannot
+pass unnoticed.
+
+### A third measurement, taken because of what step 1 is for
+
+Adding an error kind should be a small, obvious change, so the shape of the *failure* that
+guides it matters. Both candidate shapes were built and a fourth member added to the union:
+
+| Shape | Errors reported | What the message said |
+|---|---|---|
+| `Record<DomainError['kind'], …>` | 2 | `Property 'Conflict' is missing in type … but required in type Record<…>` |
+| `switch` with a `never` default | 2 | `Type '… & Conflict' is not assignable to type 'never'` |
+
+**The count is a tie and the message is not.** A `never` default reports an assignment
+failure and leaves the reader to work out which member caused it; the table names the
+missing kind. The design's `never` default was adopted in spirit and dropped in spelling.
+
+Two errors rather than one is also the right number, arrived at by correcting a defect
+rather than by design. There are two tables — `LEVELS` beside the constructors and
+`STATUSES` in the renderer — because adding a kind genuinely requires two decisions, and
+the compiler now asks for each in the file that owns it. The first attempt put both in one
+table and reported once, which read better and was wrong: it left the log level being
+passed to the constructor by hand as a separate argument, so "level follows kind" was an
+intention rather than a fact, and a second copy of the mapping sat in the renderer free to
+disagree with it. Found in review, and the fix deletes a parameter.
+
+### Deliberate departures in 1
+
+Two of these narrow what the design put in this step. Both follow one rule, which is
+stated here in the terms the repository can carry: **machinery arrives with the step that
+consumes it.**
+
+- **`authedHandler` is not built.** Its parameter types are decided entirely by the
+  authenticator — whether verification is async, what its failure kind is, what the JWT
+  payload validation returns — and none of that exists yet. Building it now means
+  inventing a placeholder for each and having the real thing bend to fit. A2's amendment
+  says exactly this about extracting an abstraction from a single case; this would be
+  extracting from none. The structural guarantee it is supposed to provide comes from the
+  handler never receiving `res` and receiving its identity as a parameter, and both are
+  established by `publicHandler`, which the authed variant will wrap rather than replace.
+- **Four of the seven error kinds are not built.** `ValidationFailed`, `NotFound` and
+  `Unexpected` are load-bearing at this step — malformed JSON needs a 400 carrying
+  `details`, the 404 fallback needs an envelope, and an unhandled throw needs somewhere to
+  land that is not Express's HTML page. Nothing raises a 401, 403, 409 or 422 yet. What
+  makes deferring safe here is a mechanism rather than a promise: the measurement above
+  shows that adding a member is a single located compile error. Three members are also
+  enough to exercise everything the observability design guarantees — the payload ban on
+  the client-facing constructors with `unexpected` as the permitted exception, and level
+  following kind across both the 4xx and 5xx sides.
+- **`toPennies` returns `Result<Pennies, DomainError>`, not `Result<Pennies, InvalidAmount>`.**
+  A narrower channel would have to name the intersected member type, which means writing
+  the correlation-id intersection a second time — and §8b's reason for intersecting onto
+  the union in one place is that a member added later cannot then forget it. The union is
+  the error channel.
+- **`toDecimal` is not built.** Nothing renders money yet.
+- **A body over the limit renders as 400, not 413.** Setting `limit: '16kb'` creates a
+  failure mode none of §8's six criteria names: body-parser raises `entity.too.large`,
+  which would otherwise fall through to `unexpected` and answer 500 to what is plainly a
+  client error. The specification publishes no 413, so it renders as a validation failure
+  with a `details` entry naming the limit.
+- **The logger is hand-rolled, writes to stdout, and knows nothing about tests.** One JSON
+  object per line, which is what a collector expects and what `JSON.stringify` already
+  escapes correctly. Silencing it during the suite is done by a test helper that spies on
+  the sink, so no branch on `NODE_ENV` and no swappable-sink API exists in production code
+  for the benefit of tests. See the reference diff.
+
+### One thing found rather than predicted
+
+**body-parser's `SyntaxError` message embeds a fragment of the body it failed to parse.**
+The harmless reading is `Unexpected token } in JSON at position 5`; the reading that
+matters is a failed signup whose fragment is a password. Translating that error by
+carrying its message across would have walked a credential into the log by a route §8b
+never names, because §8b is about the *payload* parameter and this arrives as an
+exception's `message`. The parser's message is discarded and a fixed one substituted.
+Asserted rather than described: `error-envelope.test.ts` posts a malformed body carrying a
+password and greps every log record for it.
+
+### Diff against the reference, one line each
+
+| Difference | Verdict |
+|---|---|
+| Reference echoes the correlation id as an `x-correlation-id` response header, on every response | **Reference was right, and it is adopted.** The envelope's copy covers only requests that failed; the header covers the ones that succeeded slowly, which is the other half of the question a support request asks. |
+| Reference's renderer `throw`s in its `never` default branch | **Reference was wrong.** That branch is unreachable by construction, but it is reached from the error middleware — the one place in the stack with nothing above it to catch — so the safe fallback is to render a 500, not to throw. |
+| Reference's logger branches on `NODE_ENV === 'test'` and exports `setLogSink`, `resetLogSink` and `captureLogs` | **Deliberate departure.** That is a test-only API and a test-only branch living in production code. The capture helper here is in `test/`, and production code has no idea the suite exists. |
+| Reference's logger writes to stderr | **Deliberate departure.** Records at `info` for ordinary client mistakes are not diagnostics of a failing process; stdout is where a collector expects them. |
+| Reference's `toPennies` returns `number \| null` | **Reference was wrong, by its own brief** — §4 specifies a `Result`. A `null` return also puts the failure outside the error channel, so the caller has to invent a message and cannot log at construction. |
+| Reference has no branded `Pennies` type | **Deliberate departure.** A bare `number` lets an amount in pounds be passed where pennies are expected, which is an arithmetic error a hundred times too small and entirely silent. |
+| Reference assembles every client-facing message inside the renderer, from a `resource` field | **Equivalent.** Both put a call-site-controlled string into the envelope, so the exposure is identical; the difference is only where the sentence is composed. |
+| Reference's `Success<T>` has `status: number`, with `created`/`okBody`/`noContent` helpers | **Deliberate departure.** `200 \| 201` makes a status this API does not publish a type error, which is pinned. `noContent` belongs to the `DELETE` endpoints, which section 9 defers. |
+| Reference's `Unexpected` carries `fellThrough: true` | **Deliberate departure.** A marker field with no consumer. Its stated purpose — "this was not classified" — is already true of every `Unexpected`, since it is the catch-all. |
+| Reference's adapter takes a response schema and runs egress validation inside | **Outstanding, correctly.** §8c puts egress validation with the first response schema, at step 2. It confirms the adapter gains a parameter there rather than changing shape. |
+| Reference exports `withCorrelationId` "for tests and for jobs" | **Deliberate departure.** Neither exists. |
+| Reference's malformed-JSON branch, `res.headersSent` guard and path-less 404 fallback | **Equivalent, and arrived at independently.** |
+
+### Corrections to catalogue entries written in advance
+
+Three entries were written from the design before the code existed, and building it made
+two of them wrong in detail. Corrected in place, in the catalogue, which owns them.
+
+**R11** no longer claims the two 2dp mechanisms can drift, because they now share one
+predicate. **R25** was wrong about the route — attacker-controlled log content does not
+wait for the JWT path, it is live today via the field names Ajv reports for an unknown
+property. And **R24** was rewritten rather than adjusted: raised in review, the question
+was whether `payload?: never` is anything more than a convention, and measuring it says
+it guards one key name — `{ body }`, `{ requestBody }` and `{ ...body }` all compile. The
+entry now carries that table, the three accepting cases are pinned in
+`errors.type-assertions.ts` so the boundary is recorded rather than rediscovered, and the
+allowlist that closes it is repriced: the design called it "a larger piece of work" and it
+is a net deletion.
+
+That correction also reaches section 3, which lists "no credential and no request-body
+value ever reaches a log record" as mechanised. It holds — but what makes it hold is that
+the constructors compose their log fields from Ajv metadata, names without values, rather
+than the type that appears to promise it. The type mechanises the regression, not the
+invariant. R24 owns the distinction.
+
+### One thing to carry forward
+
+The adapter is the thing steps 2 through 6 repeat, and it now has two known changes ahead
+of it rather than none: a response-schema parameter at step 2, and the authenticated
+variant at step 3. Both are additions to `src/http/handler.ts` and neither changes what a
+handler returns, which is the part that gets copied.
