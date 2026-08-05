@@ -427,3 +427,142 @@ The reference's `truncateAll` is the right shape to adopt at that point — incl
 note that `cascade` is required because of the foreign-key chain, and `restart identity`
 so ids do not drift between tests. Recorded as R31 so it is a decision with a date rather
 than something discovered when two files start interfering.
+
+---
+
+## Slice 0e — the skeleton
+
+### Claim under test
+
+> Node runs this project's TypeScript entrypoint directly, so `tsx` is a dependency this
+> build does not need.
+
+**The falsification pass came back negative. The conclusion survived, by a different
+route than the claim proposed.**
+
+`node src/main.ts` fails with `ERR_MODULE_NOT_FOUND: /app/src/http/app.js`. Native
+type-stripping executes TypeScript but does not rewrite module specifiers, and `nodenext`
+with `verbatimModuleSyntax` requires the `.js` extension the *emitted* file would carry.
+Under `noEmit: true` nothing is emitted, so that specifier names a file which does not
+exist. `node --help` offers `--experimental-strip-types` and
+`--experimental-transform-types`, and nothing that rewrites specifiers.
+
+**The evidence that made this look already answered was two half-truths, and both are
+worth naming because each looked sufficient.** Node 24 does run a `.ts` file with no
+flag — but only one with no relative imports, which describes no file in this project.
+And slice 0d's observation that `FileMigrationProvider` loads `.ts` migrations with no
+`tsx` present is an observation about **vitest**, which resolves modules itself. Neither
+measurement touched `node` executing a multi-file program.
+
+### What was measured, rather than argued, before choosing
+
+Three ways out. Each was run to a `200` from the endpoint before being compared.
+
+- **`tsx`.** Works. Also **re-arms the `F1` build-script gate**, because it installs
+  esbuild, which declares a `postinstall` — slice 0a's hazard, armed for real, and caught
+  only by 0a's instruction to re-check `allowBuilds` whenever a dependency is added. What
+  it costs and the one detail worse than 0a predicted are in **R18**, which owns that
+  risk.
+- **A build step.** `tsc -p tsconfig.build.json` then `node dist/main.js`. Works. No
+  dependency, and the gate stays unarmed.
+- **`.ts` import specifiers.** Would work natively with neither dependency nor build, at
+  the cost of changing every relative import in the repository and adding
+  `allowImportingTsExtensions`. Not measured beyond that, because the cost is the
+  argument against it.
+
+**Chosen: the build step.** `tsx` was declined not on taste but on the measured cost —
+re-arming a gate whose presenting symptom is "the toolchain is completely broken", in a
+repository whose README tells a reviewer to run `pnpm install --frozen-lockfile`, in
+exchange for watch mode. The build path also refuses to start code that does not
+typecheck, and it is the shape a deployed service uses anyway.
+
+`tsconfig.build.json` carries emit settings only and `extends` the base config, so what
+`pnpm build` compiles is compiled under the settings `pnpm typecheck` checks. `rootDir`
+is set explicitly because TypeScript 6 raises `TS5011` without it rather than inferring
+the common source directory as 5.x did.
+
+### Second claim under test, predicted from the tsconfig before the attempt
+
+> Express 5's types need an interop dance, the same shape as the `ajv-formats` problem.
+
+**Falsified.** `import express, { type Express } from 'express'` typechecks unchanged.
+`@types/express` does declare `export = e`, but the two cases are not the same shape:
+`ajv-formats` declares an ESM `export default`, which under `nodenext` makes TypeScript
+type the default import as the module namespace, whereas `export =` is exactly the form
+`nodenext`'s CommonJS interop resolves correctly. The `ajv-formats` comment's advice —
+look for a named export before reaching for a cast — was followed and turned out not to
+be needed either. No cast anywhere.
+
+### Third claim under test, carried forward from slice 0a
+
+> `supertest` brings six `no-unsafe-*` lint errors, so the exemption must be scoped to
+> test files.
+
+**Falsified, and the exemption is not needed at all.** `pnpm lint` is clean with the
+supertest test in place. `@types/superagent` does type `body` as `any`, so the premise is
+true; what is false is that using supertest is enough to trigger the rules. Asserting on
+the whole body — `expect(response.body).toEqual({ status: 'ok' })` — leaves the `any` in
+a generic parameter position and nothing fires.
+
+**Verified live rather than assumed absent**, because a rule that reports nothing is
+indistinguishable from a rule that is switched off: adding `expect(response.body.status)`
+produces `Unsafe member access .status on an 'any' value`. So the rules are working, and
+the trigger is the *assertion style*, not the dependency. Whole-body `toEqual` assertions
+are better assertions anyway — they catch an extra field, which is the property egress
+validation exists to guarantee at step 2 — so this is a case where the strict rule and
+the better test agree, and no exemption has to be written.
+
+### The composition root, which A4 assigns to this step
+
+`src/http/app.ts` exports `createApp()`, which registers every route **one line each**
+against a named handler, and returns the app without listening. `src/main.ts` is the only
+thing that listens.
+
+Two consequences, and the second is the reason for the split rather than a side effect.
+Adding a route is one line next to nine like it, with nothing between that line and the
+function it names — no registry, no decorator, no filesystem scan. And a test drives the
+real HTTP stack without a port, which is what `src/http/health.test.ts` does.
+
+### Deliberate departures in 0e
+
+- **The health endpoint is not published in `openapi.yaml`.** Recorded, with its
+  reasoning, in `docs/spec-changes.md` § Additions.
+- **The route body lives in its own module** rather than inline in the composition root.
+  The reference does the opposite; see the diff below.
+- **No `dev` script.** The build step has no watch mode, and `tsc --watch` alongside
+  `node --watch` is two processes to document for a convenience nothing in the workflow
+  needs yet. `pnpm test` is the loop this repository actually runs.
+- **No `migrate` script still.** 0d deferred it to this step as a consequence of the
+  `tsx` question; with a build step available it would now be `pnpm build` followed by a
+  script pointing into `dist`, which is more machinery than the migrator's two current
+  callers need. Deferred again, deliberately, and it is one line whenever a caller wants
+  it from a shell.
+
+### Diff against the reference, one line each
+
+| Difference | Verdict |
+|---|---|
+| Reference ships a `tsx` dependency and `dev: "tsx watch src/main.ts"`, but its tree contains **no `src/main.ts`** | **Reference was wrong, and this settles the question 0a deferred.** That script cannot ever have run. The dependency is therefore undefended by the reference's own tree — it was carried because examples carry it, which is precisely the useless outcome this pass exists to avoid. |
+| Reference has no `build` or `start` script, and its README documents no way to run the service | **Reference was wrong.** It is a service that could not be started, only tested. |
+| Reference's composition root is `buildApp(db)` inside `src/http/routes.ts` | **Equivalent in role, deliberate departure in shape.** Worth recording that a composition root *does* exist there — the expectation carried into this slice was that there would be nothing to diff against. What it lacks is the entrypoint that calls it. |
+| Reference registers each route with its handler body inline, roughly ten lines apiece | **Deliberate departure.** A4 asks for one line per route because the shape gets copied at speed by someone who did not write it, and a ten-line body is a template to edit rather than a line to add. The bodies are legible; that is not the objection. |
+| Reference has `/health` inline in `buildApp`, returning `{ status: 'ok' }`, unversioned | **Equivalent, and arrived at independently.** Same path, same body, same decision to keep it outside `/v1`. |
+| Reference imports `express, { type Express, type Request }` with no cast | **Reference was right**, and so was the code written here before it was consulted. See the second claim above. |
+| Reference disables six `no-unsafe-*` rules across its probe tree | **Reference was wrong, or at least over-broad.** One rule fires, only on drilling into `res.body`, and the assertion style that avoids it is the better assertion. Nothing is disabled here. |
+| Reference passes `db` into the composition root; `createApp()` takes nothing | **Outstanding, not a departure.** Nothing in this slice touches the database. The parameter arrives with the first endpoint that needs it, at step 2. |
+| Reference registers `correlationMiddleware` and `express.json({ limit: '16kb' })` before any route | **Outstanding, correctly.** Both are step 1 — observability is §8b and the body parser has nothing to parse until a route reads a body. |
+
+### One thing found, and fixed rather than carried forward
+
+`tsc` overwrites what it emits and does not remove what it no longer emits, so renaming a
+module leaves its stale `.js` in `dist/`. First recorded here as latent; then fixed,
+because the alternative was a README instruction that only works if it is remembered, and
+`pnpm build` clearing its own output directory is a mechanism instead. Verified with a
+planted `dist/stale-module.js`, which the next build removed.
+
+**It clears the directory with `node -e` rather than `rm -rf`, and that is the part worth
+recording**, because the obvious spelling would quietly break a claim made elsewhere. The
+README tells a reviewer that this path needs nothing but Node and pnpm; `rm -rf` makes
+that false on Windows. Note that `runcontainer.ps1` does not settle it — it only ever runs
+`devcontainer up`, so scripts written here always execute in bash, and it is the
+reviewer's shell rather than the author's that the portable spelling is for.
