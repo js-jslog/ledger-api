@@ -61,6 +61,89 @@ with nothing configured and there is no key in this repository to leak. The cost
 restarting the service invalidates every token it has issued. `docs/residual-risk-catalogue.md`
 R32 carries the reasoning, and R38 records what a deployed service would need instead.
 
+## Adding an endpoint
+
+This service is expected to grow, and adding an endpoint should require no new machinery.
+That is a claim rather than a hope, so here is the whole of it. Every step names the file
+it happens in, and there is no step that is not on this list.
+
+**0. Only if the resource is new: a migration.** `migrations/00N-<table>.ts` and its
+Kysely declaration in `src/db/schema.ts`. Each table arrives with the endpoint that first
+reads it rather than up front, because the migrations are where the money representation
+and the trigger-maintained timestamps are actually settled, and those are domain decisions
+rather than plumbing. Most endpoints skip this step; it is numbered zero because when it
+does apply it comes before everything else.
+
+**1. An ingress schema, in `src/http/schemas.ts`** — one per thing the client sends. A
+request body is one; so is a path parameter, which is client input like any other and is
+validated as `req.params` rather than trusted because Express handed it over as a string.
+`additionalProperties: false` on every object, **including nested ones** — it is not
+inherited. `as const` is not optional: without it the inferred body type degrades to
+`unknown` silently.
+
+An endpoint with no body and no path parameter — `GET /v1/accounts` — skips this step.
+
+**2. A response schema, in `src/http/response-schemas.ts`.** The published body, with
+`additionalProperties: false`. This is not symmetry with step 1: it is what stops a
+persistence row or a password hash reaching a client, because the adapter validates every
+response against it and a leak becomes a 500 instead of a disclosure.
+
+**3. A repository method, in `src/repo/<table>.ts`.** Add it to the port type first — the
+service depends on that type and never on Kysely, so column names and driver error codes
+stop here. A row that is not there comes back as `undefined` rather than as an error: the
+repository reports what it found, and which status that deserves is step 4's decision.
+
+**4. A service method, in `src/service/<resource>.ts`,** returning
+`ResultAsync<Body, DomainError>`. This is where ownership is decided, and the order is
+load-bearing:
+
+> Resolve the resource. If it is not there, `notFound`. Only then compare its owner
+> against the authenticated user id, and if they differ, `forbidden`.
+
+Comparing first and resolving second answers 403 for a resource that does not exist, where
+the specification says 404 — and it passes every happy-path test. `fetch_userRzA` in
+`src/service/users.ts` is the worked instance.
+
+**5. A handler, in `src/http/<resource>.ts`.** Two lines of shape: validate the ingress,
+call the service, map the value to `{ status, body }`. Register it with **`authedHandler`**
+unless the endpoint is one a caller reaches before it has a token — there are two of those
+and there will not be a third. The adapter hands the authenticated user id in as the first
+parameter, so a handler cannot ask who is calling and get no answer.
+
+**6. One line in `src/http/app.ts`,** the composition root. Every route this service
+answers is registered there, one line each.
+
+**7. Tests, in `src/http/<resource>.test.ts`** — the happy path and at least one sad path.
+Nothing generates them and nothing checks that they exist.
+
+### What you do not touch
+
+No middleware, no error-handling code, no registry and no configuration. A new error
+status is the one exception, and it announces itself: the two tables keyed on the error
+union — `LEVELS` in `src/domain/errors.ts` and `STATUSES` in `src/http/render-error.ts` —
+fail to compile until the new kind has a level and a status.
+
+`src/http/app.test.ts` drives every registered route with no `Authorization` header and
+requires a 401, so an endpoint registered with the wrong adapter fails there rather than in
+production. If your endpoint is genuinely public, that file is where you say so.
+
+### The worked example: `GET /v1/accounts`
+
+`GET /v1/accounts` is specified in `openapi.yaml` and deliberately not built —
+`docs/residual-risk-catalogue.md` R34 records why. It is also the cheapest endpoint in the
+document to add, which is what makes it the example: it introduces no concept the service
+does not already have.
+
+It skips step 1 entirely — no body, no path parameter. Its response schema is a wrapper
+around the one `GET /v1/accounts/{accountNumber}` already uses. Its repository method is a
+`where('user_id', '=', …)` returning an array. Its service method needs no ownership check
+at all, because it never resolves a resource by an id the client supplied — filtering by
+the authenticated user id is the whole of the authorisation, and that is the one case where
+step 4's rule does not apply.
+
+That leaves a response schema, a repository method, a service method, a handler, a route
+and its tests.
+
 ## Troubleshooting
 
 **A migration fails with `relation "..." already exists`, or the database holds tables
