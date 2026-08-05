@@ -67,12 +67,24 @@ This service is expected to grow, and adding an endpoint should require no new m
 That is a claim rather than a hope, so here is the whole of it. Every step names the file
 it happens in, and there is no step that is not on this list.
 
-**0. Only if the resource is new: a migration.** `migrations/00N-<table>.ts` and its
-Kysely declaration in `src/db/schema.ts`. Each table arrives with the endpoint that first
-reads it rather than up front, because the migrations are where the money representation
-and the trigger-maintained timestamps are actually settled, and those are domain decisions
-rather than plumbing. Most endpoints skip this step; it is numbered zero because when it
-does apply it comes before everything else.
+**0. Only if the resource is new: a migration and an identifier.**
+`migrations/00N-<table>.ts` with its Kysely declaration in `src/db/schema.ts`, and a minter
+in `src/domain/ids.ts` if the resource carries a new kind of id. Each table arrives with
+the endpoint that first reads it rather than up front, because the migrations are where the
+money representation and the trigger-maintained timestamps are actually settled, and those
+are domain decisions rather than plumbing. Most endpoints skip this step; it is numbered
+zero because when it does apply it comes before everything else.
+
+**0b. Only if the domain cannot yet do what the endpoint needs: a domain function**, in
+`src/domain/`, with its tests. This is the step that is easy to miss, because the other
+seven are about wiring and this one is not.
+
+The test is whether the endpoint is the first to *do* something rather than the first to
+*expose* something. `GET /v1/accounts/{accountNumber}` was the first endpoint to render
+money, and `toDecimal` did not exist — money had only ever travelled inwards. That is a
+domain gap the endpoint revealed, not a step in wiring it up, and it belongs here where the
+rest of `src/domain/` can see it rather than inside a service that happened to need it
+first.
 
 **1. An ingress schema, in `src/http/schemas.ts`** — one per thing the client sends. A
 request body is one; so is a path parameter, which is client input like any other and is
