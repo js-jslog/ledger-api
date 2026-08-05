@@ -106,15 +106,24 @@ stop here. A row that is not there comes back as `undefined` rather than as an e
 repository reports what it found, and which status that deserves is step 4's decision.
 
 **4. A service method, in `src/service/<resource>.ts`,** returning
-`ResultAsync<Body, DomainError>`. This is where ownership is decided, and the order is
-load-bearing:
+`ResultAsync<Body, DomainError>`. If the endpoint reaches a resource by an id the client
+supplied, do not write the ownership check — call it:
 
-> Resolve the resource. If it is not there, `notFound`. Only then compare its owner
-> against the authenticated user id, and if they differ, `forbidden`.
+```ts
+repo
+  .find_accountByNumberRzA(accountNumber)
+  .andThen((account) =>
+    owned_resourceRz(account, (found) => found.userId, authenticatedUserId, 'Bank account'),
+  )
+  .map(toResponse)
+```
 
-Comparing first and resolving second answers 403 for a resource that does not exist, where
-the specification says 404 — and it passes every happy-path test. `fetch_userRzA` in
-`src/service/users.ts` is the worked instance.
+`owned_resourceRz` is in `src/service/ownership.ts`. It answers 404 for a resource that is
+not there and 403 for one belonging to somebody else, in that order, and the order is the
+reason it is a function rather than four lines you copy: comparing the owner before the
+lookup answers 403 for a resource nobody holds — where the specification says 404 — and it
+passes every happy-path test. The only thing your endpoint supplies is which field carries
+the owner.
 
 **5. A handler, in `src/http/<resource>.ts`.** Two lines of shape: validate the ingress,
 call the service, map the value to `{ status, body }`. Register it with **`authedHandler`**

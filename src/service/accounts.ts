@@ -1,10 +1,11 @@
 import type { FromSchema } from 'json-schema-to-ts'
-import { err, ok, type ResultAsync } from 'neverthrow'
+import type { ResultAsync } from 'neverthrow'
 
-import { forbidden, notFound, type DomainError } from '../domain/errors.js'
+import type { DomainError } from '../domain/errors.js'
 import { toDecimal } from '../domain/money.js'
 import type { createAccountSchema } from '../http/schemas.js'
 import type { AccountRecord, AccountsRepository } from '../repo/accounts.js'
+import { owned_resourceRz } from './ownership.js'
 
 export type CreateAccountBody = FromSchema<typeof createAccountSchema>
 
@@ -73,24 +74,16 @@ export const accountsService = (repo: AccountsRepository): AccountsService => ({
       .map(toResponse),
 
   /**
-   * The same four moves as `fetch_userRzA` in `src/service/users.ts`, and this is the second
-   * real instance of them: resolve, 404 if absent, compare the owner, 403 if foreign.
-   *
-   * What differs from the first instance is only which field carries the owner — `userId`
-   * here, `id` there, because a user owns itself. What does not differ is the order, and the
-   * order is the part that is easy to get wrong invisibly: comparing before resolving
-   * answers 403 for an account number nobody holds, where the specification says 404.
+   * The owner is a column here rather than the resource's own id, which is the one thing
+   * that differs between this endpoint's authorisation and the user endpoint's — and it is
+   * the difference that made `owned_resourceRz` worth extracting from two cases instead of
+   * guessing at from one.
    */
   fetch_accountRzA: (authenticatedUserId, accountNumber) =>
-    repo.find_accountByNumberRzA(accountNumber).andThen((account) => {
-      if (account === undefined) {
-        return err(notFound('Bank account was not found'))
-      }
-
-      if (account.userId !== authenticatedUserId) {
-        return err(forbidden('You are not allowed to access this bank account'))
-      }
-
-      return ok(toResponse(account))
-    }),
+    repo
+      .find_accountByNumberRzA(accountNumber)
+      .andThen((account) =>
+        owned_resourceRz(account, (found) => found.userId, authenticatedUserId, 'Bank account'),
+      )
+      .map(toResponse),
 })
