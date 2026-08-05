@@ -18,8 +18,9 @@ written when the decision is taken**, not reconstructed at the end, so the order
 below is roughly the order in which each trade was made.
 
 Scope is deliberately narrow: create-and-fetch for users, accounts and
-transactions, plus login and the two list endpoints. `PATCH` and `DELETE` are
-absent by decision, and the reasoning is entry R2.
+transactions, plus login. `PATCH` and `DELETE` are absent by decision, and the
+reasoning is entry R2; the two list endpoints are absent by a different decision,
+and the reasoning is entry R34.
 
 ---
 
@@ -60,6 +61,7 @@ absent by decision, and the reasoning is entry R2.
 | R31 | The test suite resets once per run, not between test files or tests | Low now, Medium from step 2 | Certain once two files write the same table |
 | R32 | Local development credentials are committed in `compose.yml` | Low | Only if the values are reused outside a developer machine |
 | R33 | The log sink has no level threshold, and every error logs | Low now, Medium under real traffic | Certain — an unmatched-route scan is enough |
+| R34 | Two specified list endpoints are not built | Low | Certain — both paths answer 404 |
 
 ---
 
@@ -152,14 +154,20 @@ how long keys are retained. Perhaps two hours done properly.
 
 ## R4 — Transaction list is unpaginated
 
-**Chosen.** `GET /v1/accounts/{accountNumber}/transactions` returns every
-transaction, matching `ListTransactionsResponse`, which defines no pagination
-fields.
+**Chosen.** `ListTransactionsResponse` defines no pagination fields, so the endpoint
+it describes returns every transaction on an account.
 
-**What it costs.** Response size and query time grow without bound with account
-age. An old account is a slow request and a large payload.
+**This is a risk the endpoint inherits rather than one currently running.** The
+endpoint itself is not built — see R34 — so nothing in this service is unpaginated
+today. The entry stays because the *specification* is what carries the decision, and
+whoever adds the endpoint inherits it without being asked. That includes anyone
+following the README walkthrough, which is why the walkthrough points here.
 
-**How you would trigger it.** Create several thousand transactions and list them.
+**What it costs.** Response size and query time grow without bound with account age.
+An old account is a slow request and a large payload.
+
+**How you would trigger it.** Build the endpoint as specified, create several thousand
+transactions, and list them.
 
 **What closes it.** Keyset pagination on `(created_at, id)` rather than
 `OFFSET` — offset pagination degrades on exactly the access pattern a transaction
@@ -1135,9 +1143,21 @@ interface the machine had. The argument for committing the credentials depended 
 property the configuration did not have. It now reads `127.0.0.1:55432:5432`.
 
 The real cost is precedent. A committed credential that is genuinely harmless normalises
-the shape, and the next one may not be — particularly the JWT signing key arriving at step
-3, which is the same kind of string in the same kind of file and must not be treated the
-same way.
+the shape, and the next one may not be — particularly the JWT signing key, which is the
+same kind of string in the same kind of file and is deliberately not treated the same way.
+
+**How the signing key differs, decided rather than deferred.** It is generated once per
+process with `randomBytes`, and there is no environment variable, no default and no
+committed fallback. A fresh clone therefore works with nothing configured, and §3's "no
+signing key, secret or credential committed" is satisfied by there being nothing to
+commit. The cost is that issued tokens do not survive a restart, which is true, stated in
+the README, and irrelevant to a service with no deployment.
+
+A deployed service would need the opposite: the key supplied from the environment, shared
+across instances, rotatable, and absent at startup treated as a failure to boot rather
+than as a reason to generate one. None of that is built, and a `NODE_ENV === 'production'`
+branch enforcing it would be a guard for a case that cannot occur in any run this
+repository supports.
 
 **How you would trigger it.** Reuse these values anywhere reachable from another host, or
 copy the pattern for the signing key at step 3 on the grounds that `compose.yml` already
@@ -1184,3 +1204,36 @@ renderer — which is a deliberate trade to make once, not a default to inherit.
 construction rather than at occurrence, which is a question of *when* a record is
 written. This one is about how many are written and whether anything can turn them
 down.
+
+
+---
+
+## R34 — Two specified list endpoints are not built
+
+**Chosen.** `GET /v1/accounts` and `GET /v1/accounts/{accountNumber}/transactions` are
+described in the specification and are not implemented. Create-and-fetch is delivered for
+all three resources, along with login.
+
+**Why these two rather than any others.** They are the only endpoints in scope that
+introduce no concept the service does not already contain: no new table, no new ownership
+rule, no new error status. Both are a query scoped to the authenticated user against a
+schema shape that already exists. That makes them the cheapest endpoints to add, which is
+the same property that makes them the least informative to have built.
+
+**What it costs.** A client generated from the specification will have two methods that
+return 404. The gap is also visible to a reader, who has to decide whether it is staging
+or incompleteness.
+
+**How you would trigger it.** Request either path. The 404 fallback answers, correctly but
+uninformatively — it does not distinguish "no such route" from "not implemented here".
+
+**What closes it.** For `GET /v1/accounts`: a repository method selecting by `user_id`, a
+response schema, a service method, and one line in the composition root. The README
+walkthrough uses this exact endpoint as its worked example, so the closure is written out
+in full there rather than summarised here. The transaction list is the same shape plus the
+pagination decision recorded in R4.
+
+**Why it is answered in the README rather than only here.** A gap a document explains
+reads differently from a gap a document omits, and this one is the worked example for the
+claim that adding an endpoint requires no new machinery. Recording it only in the risk
+catalogue would leave the strongest evidence for that claim filed as a shortcoming.
