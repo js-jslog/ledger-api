@@ -27,25 +27,7 @@ test('the migrator recorded the migration in its own ledger', async () => {
     select name from kysely_migration order by name
   `.execute(db)
 
-  expect(rows.map((row) => row.name)).toEqual(['001-migration-pipeline-proof'])
-})
-
-test('the object the migration created is readable through the typed builder', async () => {
-  // Asserted rather than assumed, and it is the reset under test rather than the
-  // insert: the data volume outlives the run, so a populated table here means the
-  // schema was inherited instead of rebuilt. Without this line the file still fails
-  // when the reset is skipped, but on a row count in a test about typed queries —
-  // loud, and pointing at the wrong component.
-  expect(await db.selectFrom('migration_pipeline_proof').selectAll().execute()).toEqual([])
-
-  await db
-    .insertInto('migration_pipeline_proof')
-    .values({ note: 'the migration ran and this table is typed' })
-    .execute()
-
-  const rows = await db.selectFrom('migration_pipeline_proof').selectAll().execute()
-
-  expect(rows).toEqual([{ note: 'the migration ran and this table is typed' }])
+  expect(rows.map((row) => row.name)).toEqual(['002-users'])
 })
 
 // These two exist to establish that `migrateToLatest` needs no "found no migrations"
@@ -67,7 +49,7 @@ test('a migration folder missing already-applied migrations is reported as corru
 
   try {
     await expect(migrateToLatest(db, empty)).rejects.toThrow(
-      /corrupted migrations.*001-migration-pipeline-proof is missing/,
+      /corrupted migrations.*002-users is missing/,
     )
   } finally {
     await rm(empty, { recursive: true })

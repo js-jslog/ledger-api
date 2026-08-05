@@ -1,29 +1,35 @@
+import type { ColumnType } from 'kysely'
+
 /**
- * The Kysely database interface. It carries no domain tables, and that is the
- * decision rather than an omission: `users`, `accounts` and `transactions` arrive
- * with the steps that read them, each alongside its own migration.
- *
- * The reason is that the migrations are where the money representation and the
- * trigger-maintained timestamps are actually settled — `INTEGER` rather than int8 or
- * `numeric` because both of those come back as strings and make a column declaration
- * here a lie that `strict: true` cannot catch, and `ColumnType<Date, never, never>`
- * because it is what turns an application-side timestamp write into a compile error.
- * Those are domain decisions, and putting them in the step everybody agrees is
- * plumbing is how they get waved through.
+ * The Kysely database interface. Each table arrives with the step that reads it,
+ * alongside its own migration, because the migrations are where the money
+ * representation and the trigger-maintained timestamps are actually settled — and
+ * those are domain decisions rather than plumbing.
  */
 export type Database = {
-  migration_pipeline_proof: MigrationPipelineProofTable
+  users: UsersTable
 }
 
 /**
- * The only table this slice creates, and it exists to be read by the test that
- * proves the migration pipeline works end to end — schema file to migrator to a
- * typed query against the result. A migration nothing reads would leave the suite
- * green without asserting anything.
- *
- * It is not a domain table and is not a placeholder for one. It goes when the first
- * real migration arrives.
+ * `never` in both write positions. The column is maintained by a database trigger, so
+ * the type's job is to make an application-side write a compile error rather than a
+ * race against the trigger that owns it — and the same declaration still leaves the
+ * column omittable on insert, which is what lets the default apply.
  */
-export type MigrationPipelineProofTable = {
-  note: string
+type TriggerMaintained = ColumnType<Date, never, never>
+
+export type UsersTable = {
+  id: string
+  name: string
+  address_line1: string
+  address_line2: string | null
+  address_line3: string | null
+  address_town: string
+  address_county: string
+  address_postcode: string
+  phone_number: string
+  email: string
+  password_hash: string
+  created_at: TriggerMaintained
+  updated_at: TriggerMaintained
 }
