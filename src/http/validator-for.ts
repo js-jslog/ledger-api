@@ -4,6 +4,7 @@ import type { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import { err, ok, type Result } from 'neverthrow'
 
 import { validationFailed, type DomainError, type FieldError } from '../domain/errors.js'
+import { isWithinScale } from '../domain/money.js'
 
 /**
  * One JSON Schema is the source of truth for both the runtime check and the
@@ -37,6 +38,26 @@ const ajv = new Ajv({
 })
 
 addFormats(ajv)
+
+/**
+ * Registered here, beside the instance, because ordering is the whole hazard: a schema
+ * carrying `currencyScale` that is compiled before this line throws
+ * `strict mode: unknown keyword: "currencyScale"` at startup. That loud failure is the
+ * good outcome and `strict: true` is what produces it — with `strict: false` the keyword
+ * would be silently ignored and 3dp amounts would validate. Asserted in the tests.
+ *
+ * It does a different job from `toPennies`, which is why both exist: this produces a
+ * spec-shaped entry in the 400's `details` array at ingress, and `toPennies` is the
+ * guarantee that no conversion can happen anywhere without the same check. They share
+ * the predicate, so they cannot disagree.
+ */
+ajv.addKeyword({
+  keyword: 'currencyScale',
+  type: 'number',
+  errors: false,
+  schemaType: 'number',
+  validate: (scale: number, amount: number) => isWithinScale(amount, scale),
+})
 
 /**
  * Ajv reports the offending location as a JSON pointer, and separately names the
@@ -84,12 +105,14 @@ export function validatorFor<S extends object>(
     // point, an unhandled `undefined` here is a 500 where a 400 belongs.
     if (body === undefined) {
       return err(
-        validationFailed([{ field: 'body', message: 'Request body is required', type: 'required' }]),
+        validationFailed('Invalid request body', [
+          { field: 'body', message: 'Request body is required', type: 'required' },
+        ]),
       )
     }
 
     if (!validate(body)) {
-      return err(validationFailed((validate.errors ?? []).map(toFieldError)))
+      return err(validationFailed('Invalid request body', (validate.errors ?? []).map(toFieldError)))
     }
 
     // No cast needed. Ajv's validator is declared as a type guard, and returning early

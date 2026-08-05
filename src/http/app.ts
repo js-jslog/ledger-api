@@ -1,5 +1,7 @@
 import express, { type Express } from 'express'
 
+import { correlationMiddleware } from '../observability/correlation.js'
+import { errorMiddleware, notFoundFallback } from './error-middleware.js'
 import { health } from './health.js'
 
 /**
@@ -14,7 +16,19 @@ import { health } from './health.js'
 export const createApp = (): Express => {
   const app = express()
 
+  // Route-independent concerns, above every route rather than inside any handler. The
+  // body limit is a decision rather than a default: without one, a request body is
+  // bounded only by memory. Exceeding it is rendered as a 400 by the error middleware,
+  // because the specification publishes no 413.
+  app.use(correlationMiddleware)
+  app.use(express.json({ limit: '16kb' }))
+
   app.get('/health', health)
+
+  // After every route, in this order. `notFoundFallback` takes no path argument: under
+  // path-to-regexp v8 both `app.use('*')` and `app.all('*')` throw at startup.
+  app.use(notFoundFallback)
+  app.use(errorMiddleware)
 
   return app
 }

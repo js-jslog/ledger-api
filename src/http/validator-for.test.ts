@@ -1,6 +1,22 @@
+import { Ajv } from 'ajv'
 import { describe, expect, test } from 'vitest'
 
+import { capturedLogs } from '../../test/observability/captured-logs.js'
+import { OUTSIDE_REQUEST } from '../observability/correlation.js'
 import { validatorFor } from './validator-for.js'
+
+capturedLogs()
+
+// Errors assert as whole objects rather than by drilling into `.details`, which pins the
+// kind, the message and the absence of any extra field at the same time. Nothing here
+// runs inside a request, so the correlation id is the sentinel rather than a uuid, which
+// is what makes the whole-object assertion exact instead of approximate.
+const asValidationFailure = (details: readonly unknown[]): unknown => ({
+  kind: 'ValidationFailed',
+  message: 'Invalid request body',
+  correlationId: OUTSIDE_REQUEST,
+  details,
+})
 
 // `as const` is load-bearing, not stylistic: without it the literal types widen,
 // `FromSchema` has nothing to work from, and the validated body degrades to `unknown`
@@ -52,9 +68,11 @@ describe('validatorFor', () => {
     const signupRz = validate_signupRz({ ...valid, isAdmin: true })
 
     expect(signupRz.isErr()).toBe(true)
-    expect(signupRz._unsafeUnwrapErr().details).toEqual([
-      { field: 'isAdmin', message: 'must NOT have additional properties', type: 'additionalProperties' },
-    ])
+    expect(signupRz._unsafeUnwrapErr()).toEqual(
+      asValidationFailure([
+        { field: 'isAdmin', message: 'must NOT have additional properties', type: 'additionalProperties' },
+      ]),
+    )
   })
 
   test('rejects an unknown key on a NESTED object', () => {
@@ -64,9 +82,15 @@ describe('validatorFor', () => {
     })
 
     expect(signupRz.isErr()).toBe(true)
-    expect(signupRz._unsafeUnwrapErr().details).toEqual([
-      { field: 'address.isAdmin', message: 'must NOT have additional properties', type: 'additionalProperties' },
-    ])
+    expect(signupRz._unsafeUnwrapErr()).toEqual(
+      asValidationFailure([
+        {
+          field: 'address.isAdmin',
+          message: 'must NOT have additional properties',
+          type: 'additionalProperties',
+        },
+      ]),
+    )
   })
 
   test('treats __proto__ as an unknown key without polluting the prototype', () => {
@@ -80,16 +104,21 @@ describe('validatorFor', () => {
     const signupRz = validate_signupRz({ ...valid, balance: '1000' })
 
     expect(signupRz.isErr()).toBe(true)
-    expect(signupRz._unsafeUnwrapErr().details).toEqual([
-      { field: 'balance', message: 'must be number', type: 'type' },
-    ])
+    expect(signupRz._unsafeUnwrapErr()).toEqual(
+      asValidationFailure([{ field: 'balance', message: 'must be number', type: 'type' }]),
+    )
   })
 
   test('names every missing required property rather than stopping at the first', () => {
     const signupRz = validate_signupRz({})
 
-    const fields = signupRz._unsafeUnwrapErr().details.map((d) => d.field)
-    expect(fields).toEqual(['email', 'password', 'address'])
+    expect(signupRz._unsafeUnwrapErr()).toEqual(
+      asValidationFailure([
+        { field: 'email', message: "must have required property 'email'", type: 'required' },
+        { field: 'password', message: "must have required property 'password'", type: 'required' },
+        { field: 'address', message: "must have required property 'address'", type: 'required' },
+      ]),
+    )
   })
 
   test('rejects an absent body rather than throwing', () => {
@@ -118,15 +147,64 @@ describe('validatorFor', () => {
     })
 
     test('refuses a schema carrying an unknown keyword', () => {
-      // The good failure mode for a custom keyword that has not been registered yet:
-      // a loud throw rather than silent acceptance of what the keyword was meant to
-      // reject.
+      // The good failure mode for a custom keyword that has not been registered: a loud
+      // throw rather than silent acceptance of what the keyword was meant to reject.
+      //
+      // This used to use `currencyScale` as its example, which stopped being an unknown
+      // keyword the moment that keyword was registered. The test is about strictness, so
+      // it needs a keyword nothing will ever register.
       expect(() =>
         validatorFor({
           type: 'object',
-          properties: { amount: { type: 'number', currencyScale: 2 } },
+          properties: { amount: { type: 'number', notARealKeyword: 2 } },
         } as const satisfies Record<string, unknown>),
       ).toThrow(/unknown keyword/)
+    })
+  })
+
+  describe('the currencyScale keyword', () => {
+    const amountSchema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['amount'],
+      properties: { amount: { type: 'number', currencyScale: 2 } },
+    } as const satisfies Record<string, unknown>
+
+    const validate_amountRz = validatorFor(amountSchema)
+
+    test('accepts an amount with two decimal places', () => {
+      expect(validate_amountRz({ amount: 10.99 }).isOk()).toBe(true)
+    })
+
+    test('accepts an amount whose scaled value floats, which is the whole point', () => {
+      // `0.29 * 100` is `28.999999999999996`, so the obvious `Number.isInteger(x * 100)`
+      // check rejects this legal amount. See money.test.ts for the exhaustive version.
+      expect(validate_amountRz({ amount: 0.29 }).isOk()).toBe(true)
+    })
+
+    test('rejects three decimal places, as a spec-shaped details entry', () => {
+      expect(validate_amountRz({ amount: 10.999 })._unsafeUnwrapErr()).toEqual(
+        asValidationFailure([
+          {
+            field: 'amount',
+            message: 'must pass "currencyScale" keyword validation',
+            type: 'currencyScale',
+          },
+        ]),
+      )
+    })
+
+    test('is registered before any schema using it is compiled', () => {
+      // The ordering footgun, asserted rather than described. A schema carrying the
+      // keyword that is compiled against an instance which has not registered it throws
+      // at compile time — which is at module load in production, so the failure lands
+      // before a request is ever served. `strict: true` is what produces that throw;
+      // under `strict: false` the keyword is ignored and 3dp amounts validate silently.
+      const unregistered = new Ajv({ strict: true })
+
+      expect(() => unregistered.compile(amountSchema)).toThrow(
+        /unknown keyword: "currencyScale"/,
+      )
     })
   })
 
@@ -134,12 +212,15 @@ describe('validatorFor', () => {
     const secret = 'short'
     const signupRz = validate_signupRz({ ...valid, password: secret })
 
-    const [detail] = signupRz._unsafeUnwrapErr().details
-    expect(detail).toEqual({
-      field: 'password',
-      message: 'must NOT have fewer than 12 characters',
-      type: 'minLength',
-    })
+    expect(signupRz._unsafeUnwrapErr()).toEqual(
+      asValidationFailure([
+        {
+          field: 'password',
+          message: 'must NOT have fewer than 12 characters',
+          type: 'minLength',
+        },
+      ]),
+    )
     // The whole reason `toFieldError` reads `message` and `keyword` and not `params`.
     expect(JSON.stringify(signupRz._unsafeUnwrapErr())).not.toContain(secret)
   })
