@@ -65,6 +65,9 @@ and the reasoning is entry R34.
 | R35 | A handler's body type is not checked against the response schema it is registered with | Medium | Only on a mismatch the egress check then catches at runtime |
 | R36 | The password length bound counts characters, and bcrypt truncates on bytes | Low | Only for a non-ASCII password over 72 bytes |
 | R37 | Slices after this point are assured by mechanism rather than by review | Medium | Bears on any defect the mechanisms cannot see |
+| R38 | The token has no lifecycle: no refresh, no revocation, no rotation | **High in production** | n/a — the named gap in delivery scope |
+| R39 | Which adapter a route is registered with is a decision nothing checks | Medium | On the first authenticated route added carelessly |
+| R40 | The login timing equalisation has no test, and its removal is silent | Low | Only if someone deletes it as dead work |
 
 ---
 
@@ -1178,7 +1181,14 @@ A deployed service would need the opposite: the key supplied from the environmen
 across instances, rotatable, and absent at startup treated as a failure to boot rather
 than as a reason to generate one. None of that is built, and a `NODE_ENV === 'production'`
 branch enforcing it would be a guard for a case that cannot occur in any run this
-repository supports.
+repository supports. **Built as described at step 3**, in `src/domain/tokens.ts`; R38
+carries what was left out of the token lifecycle.
+
+**This paragraph is where the signing key's disposition is decided, and it is the only
+place.** An earlier draft of this entry also described it in the closure below, which is
+about the Postgres credentials — the description there survived the decision above being
+taken and contradicted it, calling for a key read from the environment outside development.
+That clause is removed rather than reconciled. The mechanism has one owner.
 
 **How you would trigger it.** Reuse these values anywhere reachable from another host, or
 copy the pattern for the signing key at step 3 on the grounds that `compose.yml` already
@@ -1188,10 +1198,11 @@ does it.
 declined deliberately: it breaks the cold-start path a reviewer takes, where
 `docker compose up -d --wait` followed by `pnpm test` has to work with nothing configured.
 A `.env.example` was also declined — it would be a second copy of the same string, free to
-drift from the default in code, for no gain over having the default in code. The honest
-closure is not to remove these but to make the boundary explicit: the signing key at step 3
-is generated per run in development and read from the environment everywhere else, with no
-committed fallback, and this entry is the reason that asymmetry exists.
+drift from the default in code, for no gain over having the default in code.
+
+So the honest closure is not to remove these but to make the boundary explicit, and the
+asymmetry above is that boundary: these credentials are committed and the signing key is
+not. This entry is the reason that asymmetry exists.
 
 ---
 
@@ -1392,3 +1403,119 @@ it.
 **What closes it.** A review pass over the slices built after this entry, reading for
 semantics rather than for structure, with the ownership check and the withdrawal's status
 distinction as its two priorities.
+
+---
+
+## R38 — The token has no lifecycle: no refresh, no revocation, no rotation
+
+**Chosen.** A token is issued at login with `sub`, `iat` and `exp`, lives for one hour, and
+that is the whole of it. There is no refresh endpoint, no way to revoke an issued token
+before it expires, no key rotation, and no claim beyond the three the schema declares.
+
+**This is the one place the delivery plan leaves a gap in the code rather than in the
+process,** and it is chosen first rather than arrived at last: it stands at the head of the
+drop ordering precisely so that the endpoint scope and the recorded reasoning do not have
+to give way instead.
+
+**What it costs.** A stolen token is valid until it expires and nothing can stop it — the
+usual answer is a revocation list checked at verification, and there is none. A password
+change cannot invalidate existing sessions, which is why `docs/spec-changes.md` declines to
+put a `password` field on the update schema rather than adding one that would silently do
+nothing. And an hour is a single fixed number standing in for a decision that normally
+splits into a short access token plus a longer refresh token; here a client re-authenticates
+with the password it already holds, which is worse for the client and no worse for the
+service.
+
+**Key rotation is a narrower gap than it looks**, because of R32: the key is generated per
+process, so a restart rotates it and invalidates everything. That is rotation in the sense
+that no key is long-lived, and not rotation in any sense an operator would accept — it
+cannot be scheduled, it cannot overlap two valid keys, and it takes every live session with
+it.
+
+**How you would trigger it.** Any requirement that a session end before its hour is up: a
+logout that must mean something server-side, a compromised credential, an administrative
+lockout. R6 is the neighbouring gap on the other side of the same endpoint — nothing rate
+limits the attempts that produce a token in the first place.
+
+**What closes it.** A `jti` claim and a revocation store consulted at verification, which is
+the change `verify_tokenRzA` in `src/domain/tokens.ts` is shaped for — it is already the one
+place a token is turned into a `userId`, so the check has exactly one call site. Refresh
+tokens are a larger piece of work and a different design conversation. Neither is started.
+
+---
+
+## R39 — Which adapter a route is registered with is a decision nothing checks
+
+**Found by trying to falsify the claim it qualifies**, which is worth stating because the
+claim is otherwise a good one and is nearly true.
+
+**What holds.** `authedHandler` wraps `publicHandler` rather than replacing it, and
+authentication runs inside the adapter. Within a route registered through it, an
+unauthenticated handler is unrepresentable rather than discouraged: the handler is not
+called at all until a token has verified, and it receives the identity as a `string`
+parameter rather than as something optional it might forget to check. Both are pinned —
+`handler.type-assertions.ts` for the signature, `src/http/auth.test.ts` for the
+short-circuit. The egress check cannot be bypassed by choosing the other adapter either,
+because the other adapter is the one doing it.
+
+**What does not hold.** *Choosing* `authedHandler` is an ordinary per-route decision in
+`src/http/app.ts`, and nothing checks it. `app.get('/v1/accounts/:accountNumber',
+publicHandler(schema, fn))` compiles, lints, and passes every happy-path test written
+against it. The mechanism makes an authenticated route correct; it does not make an
+unauthenticated one impossible to write, and the difference is one line in the composition
+root — the same line A1 expects someone to copy at speed.
+
+**What it costs.** The most valuable property this design claims is stronger than the
+property it has. That gap matters more here than it would elsewhere, because R37 records
+that the remaining slices are accepted on the strength of mechanisms rather than review,
+and this is a mechanism being asked to carry a decision it does not cover.
+
+**How you would trigger it.** Add a resource endpoint and reach for the adapter the
+neighbouring file uses. `POST /v1/users` and `POST /v1/auth/login` are both legitimately
+public, so the two nearest examples are both the wrong one to copy.
+
+**What closes it, and it is cheap.** A test over the composition root that drives every
+registered route with no `Authorization` header and asserts a 401, with the two public
+routes named as the exceptions. It is a sweep rather than a per-route test, so a route added
+later is covered without anyone remembering to cover it, and the exception list is short
+enough to read. **Not built here, deliberately**: no authenticated route exists yet, so the
+sweep would assert over an empty set and pass while checking nothing — which is worse than
+absent, because it looks like coverage. It belongs with the first authenticated route, at
+the next step.
+
+---
+
+## R40 — The login timing equalisation has no test, and its removal is silent
+
+**Chosen.** `src/service/auth.ts` compares the supplied password against `DUMMY_HASH` when
+the email is unknown, so that an unrecognised address and a wrong password cost the same
+wall-clock time. Without it the unknown-email path skips bcrypt entirely and returns in
+microseconds, which makes the endpoint answer "does this email exist" to anyone with a
+stopwatch — the enumeration the identical 401 body exists to prevent, reintroduced through
+a channel the body cannot cover.
+
+**The measurement, at the cost the suite runs at.** A comparison against a real hash
+averages ~1ms at cost 4; the skipped path averages ~0.005ms. Two hundred times, and the gap
+widens with the cost — the working default of 12 puts the compare at tens of milliseconds
+against the same near-zero.
+
+**What it costs, which is the reason for the entry.** Nothing tests it. **Verified by
+removing it**: with the unknown-email path short-circuited to `false`, all nineteen tests in
+`src/http/auth.test.ts` still pass. Every other mechanism in this slice fails loudly when
+broken — the `lower(email)` lookup takes exactly one test with it — and this one is silent.
+It is a comment and a call, and the next person to read it may reasonably conclude the
+`DUMMY_HASH` compare is dead work and delete it.
+
+**Why a test was not written.** The property is a timing comparison, and asserting on
+elapsed time in a suite that runs alongside a database is how a flaky test enters. A5
+restores the concurrency test on the grounds that its outcome is settled by Postgres rather
+than by scheduling luck; this one has no such backstop, and a test that fails on a loaded
+machine trains people to re-run the suite, which costs more than this entry does.
+
+**How you would trigger it.** Delete the `?? DUMMY_HASH` and watch nothing complain.
+
+**What closes it.** Either a statistical timing assertion with enough samples and a wide
+enough margin to be stable — plausible, and more machinery than the property is worth here —
+or a structural test: inject a repository that records whether a comparison was attempted,
+and assert it was, on both paths. The second is cheap and checks the mechanism rather than
+its consequence, which is the weaker claim but the one that does not flake.

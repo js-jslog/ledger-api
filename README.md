@@ -48,6 +48,19 @@ The suite drops and recreates the `public` schema in `ledger_test` before migrat
 a run does not depend on what the previous one left behind. It refuses to do that to any
 database whose name does not end in `_test`.
 
+## Authentication
+
+`POST /v1/auth/login` exchanges an email and password for a bearer token, which every
+endpoint except that one and `POST /v1/users` requires in an `Authorization: Bearer …`
+header.
+
+**Tokens do not survive a restart, and that is a deliberate limitation rather than a bug.**
+The signing key is generated once per process and is the one configurable-looking value
+with no environment variable, no default and no committed fallback — so a fresh clone runs
+with nothing configured and there is no key in this repository to leak. The cost is that
+restarting the service invalidates every token it has issued. `docs/residual-risk-catalogue.md`
+R32 carries the reasoning, and R38 records what a deployed service would need instead.
+
 ## Troubleshooting
 
 **A migration fails with `relation "..." already exists`, or the database holds tables

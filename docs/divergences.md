@@ -879,3 +879,133 @@ and re-throws, would break it with nothing else complaining.
 slice just added. The registration shape a route copies is now
 `publicHandler(responseSchema, fn)`, and the authenticated variant should wrap rather than
 replace it, so that the egress check cannot be bypassed by choosing the other adapter.
+
+---
+
+## Slice 3 — `POST /v1/auth/login`, JWT issue and verify, `authedHandler`
+
+**The reference was not consulted for this slice**, which is a change in process rather than
+an oversight and is recorded here so a gap is never mistaken for a clean comparison. The
+pattern has been diffed twice against the same service/repository/handler shape and the
+returns were visibly diminishing; the diff resumes at the transaction slice, where the
+withdrawal is content nothing else in this project covers. The one piece of reference
+content already known to be owed here — the timing-equalising login — was carried forward in
+§ Slice 2 for exactly this reason and is built below.
+
+### Claim under test
+
+**That running authentication inside the adapter makes an unauthenticated handler
+unrepresentable rather than merely discouraged.**
+
+Tested by trying to write one. The claim splits in two, and only one half survives.
+
+**The half that holds.** Within a route registered through `authedHandler`, there is no
+unauthenticated path to be careful on. The handler is not called until a token has verified —
+asserted by a handler that records whether it ran, against a request with no header — and it
+receives `userId` as a `string` first parameter, so the shape someone writes by copying an
+unauthenticated route is a type error rather than a route that quietly serves anyone. Both
+are pinned: the signature in `handler.type-assertions.ts`, the short-circuit in
+`auth.test.ts`. The egress-bypass half holds too, and it is why the adapter wraps rather than
+replaces: there is no second path to `res`, so the response-schema check runs whichever
+adapter a route chooses.
+
+**The half that does not.** *Choosing* `authedHandler` is unchecked.
+`app.get('/v1/accounts/:accountNumber', publicHandler(schema, fn))` compiles, lints and
+passes any happy-path test written against it. The mechanism makes an authenticated route
+correct; it does not make an unauthenticated one impossible to write, and the decision sits
+one line up in the composition root — the line A1 expects to be copied at speed.
+
+So the design's claim is true of the adapter and false of the registration. **R39** records
+it, prices the closure at a route sweep over `createApp`, and says why that sweep is not
+written here: no authenticated route exists yet, so it would assert over an empty set and
+pass while checking nothing. It belongs with the first one.
+
+### Two predictions of mine that measurement corrected
+
+Both were written into comments as fact before being checked, which is the pattern the last
+two slices also produced.
+
+**The `algorithms` pin is not load-bearing.** The comment claimed the usual thing — that
+without an explicit algorithm list, verification trusts the token's own `alg` header, so
+`alg: none` gets through silently. Measured against jose 6: an unsecured token is refused
+with `JOSENotSupported` whether or not the list is passed, and a `Uint8Array` key forecloses
+HMAC-versus-RSA confusion outright because there is no public key to substitute. The pin
+stays — it costs nothing and stops being redundant if the key ever becomes a `KeyObject` —
+but the comment now says what it actually buys.
+
+**jose's error messages do not echo the token.** This one was a prediction in the other
+direction and it held: `JWSInvalid | Invalid Compact JWS` and
+`JWSInvalid | Failed to base64url decode the signature` are fixed strings. Slice 1 found
+body-parser embedding a fragment of the failed body — possibly a password — in its
+`SyntaxError`, so the same question was asked here. The log still records the error's class
+name and never its message, because "this library does not echo its input" is a property of
+a version rather than of this code, and a bearer token is a credential.
+
+### Verified in both directions, and one mechanism that could not be
+
+Every mechanism this slice adds was broken on purpose to see whether anything noticed.
+
+| Broken | What noticed |
+|---|---|
+| `lower(email)` replaced with a raw-column match | exactly one test — the mixed-case login |
+| `additionalProperties: false` off the claims schema | the undeclared-claim test |
+| Authentication removed from `authedHandler` | the five 401 cases and the short-circuit test |
+| **The `DUMMY_HASH` comparison removed** | **nothing — all nineteen tests still pass** |
+| The `credentials !== undefined` guard removed | nothing, and this one is correct |
+
+The last two are different findings. The timing equalisation is genuinely unguarded, and its
+deletion is silent in a slice where everything else fails loudly — **R40**, with the
+measurement (~1ms against ~0.005ms at cost 4) and the reason a timing assertion was declined.
+
+The guard is untested because it is unreachable: `DUMMY_HASH` is built from random bytes, so
+no supplied password can match it and the branch it protects cannot be entered. That is the
+intended state rather than a gap — the guard exists so that the unreachability is a property
+of the dummy's construction rather than something the reader has to verify.
+
+### Deliberate departures in 3
+
+- **A second repository type rather than a wider `UserRecord`.** `UserRecord`'s comment
+  claimed the password hash is write-only through the port; login has to read it, so that
+  claim cannot hold for the port as a whole any more. `Credentials` carries `id` and
+  `passwordHash` and nothing else, so the exception is spent on one named function instead of
+  on every caller, and `UserRecord` keeps the property for everything that returns a
+  response body. The comment there is amended rather than left to be true-by-reputation.
+- **`unauthenticated` takes no message parameter.** Every other constructor takes one. Every
+  reason to answer 401 — absent header, malformed header, bad signature, expired token,
+  unknown email, wrong password — has to be indistinguishable from outside, and a `message`
+  parameter is how that distinction returns one plausible call site at a time. There is no
+  parameter, so there is nothing to vary. The reason still reaches the log through `fields`.
+- **A missing row is `undefined`, not `NotFound`.** The service must treat "no such email"
+  and "wrong password" identically, and a value it cannot branch differently on is easier to
+  get right than an error channel it must remember to converge. It also keeps a 404 out of a
+  code path that publishes only 400, 401 and 500.
+- **The claims schema lives in `src/http/schemas.ts` with the other ingress schemas**, not
+  beside the token code that consumes it. A decoded payload is the fourth ingress point, and
+  putting it there means it is exported like the others and testable without a seam opened
+  in production code for the benefit of a test.
+- **A claims-schema failure renders as 401, not 500.** A payload that verified
+  cryptographically and then failed its own schema is this service's bug rather than the
+  client's, so 500 is arguable. The client supplied the token, cannot act on the distinction,
+  and telling it which claim was wrong is an oracle for how tokens are shaped. The diagnostic
+  is not lost: `validateClaims` logs the offending field names one record earlier.
+- **`DUMMY_HASH` is built at module load, at the configured cost.** Hardcoding a hash would
+  reinstate the gap it closes as soon as the cost differed, since the suite runs at 4 and the
+  default is 12. Synchronous and once per process, because the alternative is a lazily
+  memoised value threaded through an async path for no gain.
+- **`login` uses `publicHandler`**, like signup. It is where a credential is exchanged for a
+  token, so it is the second and last endpoint that cannot require one.
+
+### Sad paths
+
+400 on a missing credential field; 401 on a wrong password; 401 on an unknown email,
+asserted *equal* to the wrong-password envelope rather than merely also-401; 401 on each of
+five bad `Authorization` headers; 401 on a token signed with another key. One further test
+posts a wrong password and greps every log record for it.
+
+### One thing to carry forward
+
+The composition root now has two public routes and no authenticated ones, which is the worst
+possible state for someone copying a neighbouring line — both nearby examples use the adapter
+that skips authentication. **R39's route sweep is owed at the next step**, where the first
+authenticated route makes it non-vacuous, and it is cheap enough that it should not be traded
+against anything.
