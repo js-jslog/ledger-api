@@ -240,6 +240,33 @@ The error schemas — `ErrorResponse` and `BadRequestErrorResponse` — are deli
 open. They are not on the egress-validation path, and a correlation id is expected to
 extend them; closing them now would publish a shape that is about to change.
 
+### `GET /health`, which is the one addition deliberately *not* made to the document
+
+The service answers `GET /health` with `{ "status": "ok" }`, and the specification is left
+untouched. So this is a route the document does not describe, which is the mirror image of
+every other entry in this file and is stated here rather than left to be discovered.
+
+The reason it is not published is that it is not part of this API. The specification
+describes a versioned resource API under `/v1`, and a liveness route is operational
+tooling for whoever runs the service — a different audience, a different lifetime, and no
+client of `/v1` should ever be written against it. Keeping it off the versioned path is
+what makes that claim structural instead of a convention: there is no `/v1/health` to
+mistake for part of the contract.
+
+The reason it exists at all is narrower than the usual one, and worth being honest about
+because the usual one does not hold here. Nothing in this repository consumes it: the app
+is not containerised, there is no orchestrator and no load balancer, and the only
+healthcheck in `compose.yml` belongs to Postgres. It exists because the first route
+registered is what fixes the registration shape every later route copies, and every route
+in the specification needs machinery — an error envelope, persistence — that this stage of
+the build deliberately does not have yet. It is the only route that needs neither.
+
+Note what that argument does not claim. Database health is already answered twice over, by
+`docker compose up -d --wait` and by the test suite, so this endpoint is not a readiness
+probe and does not touch the database. Making it one would mean deciding a `503` and a
+degraded-status body, which is error-envelope design, and that belongs where the rest of
+the envelope is decided.
+
 ---
 
 ## Observations — read, considered, not built

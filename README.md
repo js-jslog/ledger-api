@@ -5,6 +5,28 @@ A REST API for a retail bank: users, accounts and transactions.
 This README is written properly once the service exists. What follows is the part that
 is needed now, because getting the database wrong is expensive to diagnose later.
 
+## Running the service
+
+```
+pnpm install --frozen-lockfile
+pnpm build
+pnpm start
+```
+
+Then `curl localhost:3000/health`, which answers `{"status":"ok"}`. `PORT` overrides the
+port.
+
+Nothing but Node and pnpm is required for this path — the devcontainer in
+`.devcontainer/` is one way to get a working toolchain, never a requirement. The database
+below is separate, and the service does not need it yet.
+
+`pnpm build` compiles to `dist/` rather than the service being run straight from source.
+Node executes TypeScript directly, but it does not rewrite import specifiers: this
+codebase imports `./app.js` as `nodenext` requires, and native execution then looks for a
+file that only the compiler produces. A build step is one way to resolve that and a
+TypeScript-aware runner such as `tsx` is another; the build step is preferred here because
+it adds no dependency and refuses to start code that does not typecheck.
+
 ## Running the database
 
 ```
