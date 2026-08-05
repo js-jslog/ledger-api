@@ -566,6 +566,15 @@ the file — and the presenting symptom really is "the toolchain is broken" rath
 "a postinstall script was skipped". The file is committed so that the day this
 happens, the fix is one line in a place that already explains itself.
 
+**Confirmed at slice 0e, on a real dependency rather than a throwaway one, with one
+detail worse than described above.** Installing `tsx` — since evaluated and declined —
+brought esbuild and armed the gate exactly as predicted. But `pnpm add` does not leave
+`allowBuilds` alone: it rewrote the entry to
+`allowBuilds: { esbuild: set this to true or false }`, an unresolved placeholder rather
+than a decision, and it is that write which breaks every script. So the fix is one line,
+but the trigger edits the file for you and leaves it in a state where the *only* signal is
+three commands failing inside `runDepsStatusCheck`.
+
 **What closes it.** Both prerequisites are in the README, and the cold-start
 rehearsal before submission exists specifically to prove the reviewer's path
 works. Nothing further is needed unless pnpm's own configuration keys move again —
