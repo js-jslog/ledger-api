@@ -241,6 +241,21 @@ open. They are not on the egress-validation path, and the correlation id below e
 them; closing them would publish a shape a future member of the union could need to
 change.
 
+### `maxLength: 72` on `CreateUserRequest.password`
+
+The document sets `minLength: 12` and no upper bound. bcrypt hashes the first 72 **bytes**
+of its input and ignores the rest, so without a bound the service accepts a password it
+does not fully honour: measured, `'a'.repeat(100)` authenticates against a hash of
+`'a'.repeat(72)`.
+
+Published rather than enforced silently, because it is a restriction on callers and a
+client generated from this document should know about it — the asymmetry argued above for
+`additionalProperties` cuts the other way here, since the constraint is one the service
+genuinely cannot honour rather than one it merely chooses to impose.
+
+`maxLength` counts characters and bcrypt counts bytes, so this bound is not exact for
+non-ASCII passwords. **R36** carries the measurement and the keyword that would close it.
+
 ### `correlationId` on both error schemas
 
 Every error envelope this service renders carries a `correlationId`, and it is published

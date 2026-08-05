@@ -730,3 +730,152 @@ The adapter is the thing steps 2 through 6 repeat, and it now has two known chan
 of it rather than none: a response-schema parameter at step 2, and the authenticated
 variant at step 3. Both are additions to `src/http/handler.ts` and neither changes what a
 handler returns, which is the part that gets copied.
+
+---
+
+## Slice 2 — `POST /v1/users`
+
+### Claim under test
+
+> `additionalProperties: false` on the response schemas turns section 3's "no persistence
+> entity and no password hash ever reaches a response body" from a checklist item into a
+> checked property: a leaked `password_hash` becomes a 500 rather than a disclosure.
+
+**Negative — it holds — and it was verified by removing the mechanism rather than by
+watching it pass.** A service returning a row with `password_hash` on it is pinned in
+`users.test.ts`; the leak needs a cast, because the service's return type already makes it
+unrepresentable, and a leak that gets past the type is the only kind there can be.
+
+| Response schema | What the client got |
+|---|---|
+| with `additionalProperties: false` | **500**, envelope only, hash absent from the body and from every log record |
+| with it removed from the root object | **201, with the hash in the response body** |
+
+The second row is the measurement. A test asserting only the first would have passed with
+the mechanism switched off.
+
+### Second claim under test
+
+> Validating the in-memory object checks something the client will never receive. Ajv's
+> type checks are `typeof`-based, so a `Date` satisfies `type: 'object'` but fails
+> `type: 'string', format: 'date-time'`. This will fire immediately and correctly.
+
+**Negative — it holds, and it fired on the first request through the endpoint**, before
+the fix was written:
+
+```
+mismatches: ["createdTimestamp must be string", "updatedTimestamp must be string"]
+```
+
+Kysely returns `Date` for `timestamptz` and the specification publishes `date-time`
+strings. The serialise-first fix was then adopted as a response to that failure. Note what
+the fix does rather than merely prevents: `JSON.stringify` renders a `Date` as an ISO-8601
+string, which *satisfies* `format: 'date-time'` — so validating the serialised form both
+accepts a legal response the in-memory check rejected and checks the bytes the client
+actually receives. The in-memory check was wrong in both directions at once.
+
+### A third measurement, taken because the design's spelling looked wrong
+
+`ColumnType<Date, never, never>` reads as though it should make a column impossible to
+insert: `never` is uninhabited, and Kysely's insert-optionality test is whether `undefined`
+extends the insert type, which it does not. On that reasoning the table could not be
+written to at all, and the spelling was changed to `ColumnType<Date, undefined, never>`
+before anything was run.
+
+**Wrong, and the design was right.** Measured with both spellings side by side: under
+`never` a row omitting the timestamps compiles, supplying one is an error, and updating one
+is an error — identical to the `undefined` spelling in all three positions. The design's
+spelling was restored. It is now pinned in `src/db/schema.type-assertions.ts` rather than
+recorded here as a fact about an afternoon, and the update case is verified in both
+directions: with the `@ts-expect-error` removed, `pnpm typecheck` fails naming the line.
+
+The reference implementation uses `ColumnType<Date, never, never>` as well.
+
+### The claim `errors.ts` was holding, and it did not survive its first call site
+
+The payload exemption on `unexpected` was justified in a comment: the body it carries is
+the service's own output, so when a response fails its published schema that body is the
+entire diagnostic. **The first call site to exercise it is egress validation, and the
+response that fails its published schema is — in the case the mechanism exists for — one
+carrying a leaked `password_hash`.** Logging the body moves the secret from the wire to
+the log store, which is not a fix.
+
+`responseValidatorFor` therefore logs Ajv's mismatches, which name the offending property
+and never its value, and the comment has been corrected in place. The permission stands;
+the justification does not. R24 still owns the general question.
+
+**The reference implementation does log it** — `payload: serialised` — so its egress check
+writes a leaked hash into the log store on exactly the request the check exists to catch.
+
+### R31, closed and verified in both directions
+
+The per-test truncate was written before the endpoint, as the entry advised. With the
+`beforeEach` removed, two tests fail because the first test's user survives into the second
+and the signup answers 409 where a 201 was expected. `restart identity` was prescribed by
+the entry and deliberately not built: no table in this design has an identity column. The
+entry records both.
+
+### Deliberate departures in 2
+
+- **The proof migration and its table are deleted**, which is what both the migration file
+  and `src/db/schema.ts` said should happen when the first real table arrived. Two of the
+  five tests in `migration-pipeline.test.ts` went with them; `users` proves the typed
+  builder for real. The three migrator failure-mode tests remain, retargeted.
+- **Email uniqueness is a unique index on `lower(email)`, and the address is stored as
+  submitted.** Two rows differing only in case are two accounts for one human. The
+  alternative — normalising to lower case on write, which is what the reference does —
+  closes the same hazard but returns an address the caller did not type. The cost of this
+  choice is a forward obligation: every lookup by email must use `lower(email)`, starting
+  with login at step 3.
+- **A repository port, which the reference does not have.** Its user persistence is inline
+  in the service, so the service knows column names and SQLSTATEs. Here `UserRecord`
+  carries no `passwordHash` at all, which makes the disclosure this slice tests for
+  unrepresentable one layer below where egress validation catches it.
+- **`BCRYPT_COST` is configuration**, 12 by default and 4 under vitest. The reference
+  hardcodes 10, departing from its own brief. A cost that fails to parse throws rather
+  than falling back, because a silent fallback under test means a slow suite with no
+  visible cause — asserted in `password.test.ts`, including that the suite is running at 4
+  and not at the default.
+- **`maxLength: 72` on `password`**, which the reference also has and which is published
+  here rather than only enforced. The measurement, and the half of it that `maxLength`
+  cannot close, are in R36.
+- **The adapter's response schema is not coupled to the handler's body type.** Attempting
+  it produces TS2589. R35 prices the assertion that would recover most of it.
+
+### Diff against the reference, one line each
+
+| Difference | Verdict |
+|---|---|
+| Reference's `egressCheck` logs `payload: serialised` | **Reference was wrong, and it is the sharpest finding of the slice.** The body that fails egress validation is the one carrying the leak; logging it relocates the disclosure rather than preventing it. |
+| Reference performs the JSON round trip inside `egressCheck` rather than at the call site | **Reference was right, and it is adopted.** Serialising in the adapter leaves a validator that quietly checks the wrong thing if anything else ever calls it. It now returns the serialised body it checked, so what is validated is what is sent. |
+| Reference matches `23505` alone, without checking which constraint was violated | **Reference was wrong**, by section 4's own rule for the account-number retry. It is harmless while `users` has one unique index and becomes a mislabelled 409 the moment it has two. |
+| Reference normalises `email` to lower case on write | **Deliberate departure**, above. |
+| Reference has no repository port for users | **Deliberate departure**, above. |
+| Reference hashes at a hardcoded cost of 10 | **Reference was wrong, by its own brief** — section 4 specifies configuration, 12 default and 4 in tests. |
+| Reference's `login` compares against a dummy hash so unknown-email and wrong-password take similar time | **Reference was right.** Not this slice's to build; it belongs with step 3 and is noted here so it is not rediscovered. |
+| Reference's `toResponse` formats timestamps with `.toISOString()` in the service | **Equivalent**, and now redundant here: the adapter validates and sends the serialised form, which renders `Date` identically. |
+| Reference spreads `line2`/`line3` conditionally because of `exactOptionalPropertyTypes` | **Not applicable.** Section 4 declines that flag, so `?? undefined` suffices and `JSON.stringify` drops the key. |
+| Reference's `Success<T>` has `status: number` with `created`/`okBody`/`noContent` helpers | **Already recorded at slice 1**, unchanged by this slice. |
+| Reference builds the trigger function with `create or replace` and loops over its tables | **Equivalent.** One table arrives per migration here, so there is nothing to loop over. |
+| Reference's `handler` hands the promise to Express and `.catch(next)`s it | **Equivalent, and the reference's guard is unnecessary on Express 5.** Predicted here that awaiting inside an `async` handler would turn a throwing service into an unhandled rejection; measured, and it does not — Express 5 propagates the rejection to the error middleware and the envelope comes out intact. Pinned in `error-envelope.test.ts` rather than left as a claim. |
+
+### One thing found by writing this document down
+
+The row above about `.catch(next)` was written as a *departure to act on* — the claim being
+that awaiting inside an `async` handler turns a throwing service into an unhandled
+rejection. It was measured only because it had been written into a deliverable as fact, and
+it is false: Express 5 propagates the rejection and the 500 envelope is intact. Section 4
+already says this ("native async error propagation — including from `async` middleware")
+and the prediction contradicted it without noticing.
+
+Two things follow. The reference's `.catch(next)` is Express 4 defensiveness rather than a
+gap here. And the property is now a test, because it is a property of the framework that
+the adapter silently depends on: an Express downgrade, or a future adapter that catches
+and re-throws, would break it with nothing else complaining.
+
+### One thing to carry forward
+
+`authedHandler` at step 3 is an addition to `src/http/handler.ts` beside a parameter this
+slice just added. The registration shape a route copies is now
+`publicHandler(responseSchema, fn)`, and the authenticated variant should wrap rather than
+replace it, so that the egress check cannot be bypassed by choosing the other adapter.

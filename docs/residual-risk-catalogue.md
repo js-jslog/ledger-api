@@ -58,10 +58,13 @@ and the reasoning is entry R34.
 | R28 | The Result naming rule sees bindings, not every position a `Result` can occupy | Low | On the first `Result`-typed class property |
 | R29 | `allErrors: true` makes validation effort scale with how invalid a body is | Low | Bounded by a stated body-size limit |
 | R30 | The published request schemas describe something looser than the service enforces | Medium | Certain for any client generated from the specification |
-| R31 | The test suite resets once per run, not between test files or tests | Low now, Medium from step 2 | Certain once two files write the same table |
+| R31 | The test suite resets once per run; per-test isolation is opt-in per file | Low | Only in a writing file that omits the `beforeEach` |
 | R32 | Local development credentials are committed in `compose.yml` | Low | Only if the values are reused outside a developer machine |
 | R33 | The log sink has no level threshold, and every error logs | Low now, Medium under real traffic | Certain — an unmatched-route scan is enough |
 | R34 | Two specified list endpoints are not built | Low | Certain — both paths answer 404 |
+| R35 | A handler's body type is not checked against the response schema it is registered with | Medium | Only on a mismatch the egress check then catches at runtime |
+| R36 | The password length bound counts characters, and bcrypt truncates on bytes | Low | Only for a non-ASCII password over 72 bytes |
+| R37 | Slices after this point are assured by mechanism rather than by review | Medium | Bears on any defect the mechanisms cannot see |
 
 ---
 
@@ -1091,7 +1094,7 @@ than to make silently — which is the whole reason this entry exists instead of
 
 ---
 
-## R31 — The test suite resets once per run, not between test files or tests
+## R31 — The test suite resets once per run; per-test isolation is opt-in per file
 
 **Chosen.** `test/db/global-setup.ts` drops and recreates the `public` schema, then
 migrates, once per run in the main vitest process. There is no truncation between test
@@ -1111,14 +1114,32 @@ reads, then run the suite. `fileParallelism: false` means the two will not inter
 the symptom is not a race — it is the second file finding rows it did not create, and the
 failure names a row count rather than the missing isolation.
 
-**What closes it.** A `truncate table … restart identity cascade` in a `beforeEach`, which
-is the shape the reference implementation already has. `cascade` is required because
-`transactions` references `accounts` references `users` — without it Postgres refuses,
-naming a table the statement did not mention. `restart identity` keeps ids from drifting
-between tests. It is a few minutes of work and it belongs with step 2, which is where the
-first real table and the second database-touching test file both arrive. Deferred rather
-than built because there is currently nothing to truncate, and a `beforeEach` naming tables
-that do not exist would not compile.
+**What closes it, and what was actually built.** `test/db/truncate.ts` exports
+`truncateAll`, called from a `beforeEach` by every file that writes. `cascade` is kept
+because the later tables reference `users` — without it Postgres refuses, naming a table
+the statement did not mention.
+
+**`restart identity` was prescribed here and deliberately not built.** No table in this
+design has an identity column: every id is minted in application code, because the
+published patterns (`^usr-…`, `^01[0-9]{6}$`, `^tan-…`) are not sequences. The clause
+would have been a reset of nothing, carried forward by every later table on the authority
+of this entry.
+
+**What remains, and it is why this entry is not deleted.** The truncate is opt-in per
+file. A new file that writes and forgets the `beforeEach` gets the old behaviour, and the
+symptom is the one described above: rows it did not create, reported as a wrong count or —
+now that `users` has a unique email — as a duplicate where a signup was expected. Nothing
+enforces the call.
+
+**Verified in both directions rather than assumed.** With the `beforeEach` removed from
+`src/http/users.test.ts`, two tests fail because the first test's user survives into the
+second: the signup answers 409 and the assertions see an error envelope. Restored, they
+pass. That is the closure being load-bearing rather than decorative.
+
+**What would close the remainder.** A `setupFiles` entry truncating before every test in
+every file, which removes the opt-in — at the cost of a connection pool in files that
+never touch the database, which is R12 pulling the other way. With one writing file the
+trade is not yet worth taking; it becomes worth taking somewhere around the third.
 
 ---
 
@@ -1237,3 +1258,137 @@ pagination decision recorded in R4.
 reads differently from a gap a document omits, and this one is the worked example for the
 claim that adding an endpoint requires no new machinery. Recording it only in the risk
 catalogue would leave the strongest evidence for that claim filed as a shortcoming.
+
+---
+
+## R35 — A handler's body type is not checked against the response schema it is registered with
+
+**Chosen.** `publicHandler` takes a response schema and a handler independently:
+`<S extends object, T>`. Nothing requires `T` to be the type `S` describes. A route can be
+registered with the wrong schema entirely, and it compiles.
+
+**What it costs.** The compile-time half of "the schema is the source of truth" holds at
+ingress and not at egress. At ingress the validated body's type *is* derived from the
+schema, so there is no second place to state the shape; at egress the service's return
+type and the published schema are two statements of one thing, free to disagree.
+
+**Why it is not simply coupled.** It was attempted. Declaring the handler as returning
+`Success<FromSchema<S & JSONSchema>>` instantiates `FromSchema` over a still-generic `S`,
+and TypeScript answers TS2589 — "type instantiation is excessively deep" — followed by
+TS2590. This is the same wall slice 0b hit from the other direction, and the same
+conclusion applies: the constraint that makes the inference work at a concrete call site
+is not available while the parameter is generic.
+
+**What limits the damage, and it is most of it.** A disagreement is not silent. Egress
+validation compares the actual body against the actual schema on every response, so a
+mismatched pair fails on the first request through that route and fails as a 500 naming
+the offending properties. The gap is that it is caught at runtime by a test rather than at
+compile time by the build — a worse place to catch it, not an uncovered one.
+
+**How you would trigger it.** Register a route with another endpoint's response schema, or
+change a service's return type without changing the schema beside it. Both compile; both
+fail the endpoint's first test.
+
+**What closes it.** An overload of `publicHandler` accepting a concrete schema type rather
+than a generic one, or a per-route type-level assertion in the style of
+`validator-for.type-assertions.ts` pinning `Success<T>` against `FromSchema` at each
+registration site. The second is cheap and does not fight the inference; it was not built
+because there is currently one route to pin, and a mechanism justified by one instance is
+the thing A2 warns about.
+
+---
+
+## R36 — The password length bound counts characters, and bcrypt counts bytes
+
+**Chosen.** `password` on `CreateUserRequest` carries `maxLength: 72`, published in
+`openapi.yaml` and enforced at ingress. It exists because bcrypt hashes the first 72
+**bytes** of its input and silently ignores the rest.
+
+**What it costs.** JSON Schema's `maxLength` counts characters, not bytes. A password of
+72 or fewer characters can still exceed 72 bytes, and the excess is discarded exactly as
+it would have been without the bound. The gap is non-ASCII passwords only.
+
+**Measured, in both halves:**
+
+| Input | Result |
+|---|---|
+| `'a'.repeat(100)` compared against a hash of `'a'.repeat(72)` | **matches** — this is what the bound closes |
+| `'é'.repeat(40)` — 40 characters, 80 bytes — hashed, then compared against `'é'.repeat(36)` plus twelve arbitrary characters | **matches** — this is what the bound does not close |
+
+The second row is the entry. Both strings share a 72-byte prefix, both pass
+`maxLength: 72`, and both authenticate.
+
+**What it does not cost.** Not entropy: 72 bytes is far more than any password needs. The
+objection is honesty — a caller who sets a long password is told it was accepted, and part
+of it was not used. The failure is silent in exactly the way this project treats as the
+disqualifying property, which is why the ASCII half is closed rather than also documented.
+
+**How you would trigger it.** Sign up with a password over 72 bytes but at most 72
+characters, then authenticate with any string sharing its first 72 bytes.
+
+**What closes it.** A custom Ajv keyword — `maxBytes: 72` — in the shape `currencyScale`
+already establishes, replacing `maxLength` at the schema layer: roughly eight lines beside
+the keyword registration, plus a test. It was not taken because `maxBytes` is not a
+standard keyword, so the published document could no longer state the constraint in a form
+a generated client understands, and the whole point of correcting the specification (A1)
+is that it stays usable. `maxLength: 72` is the strongest bound that is both enforceable
+and publishable; the remainder is recorded here rather than closed.
+
+**The reference implementation has the same gap**, with `maxLength: 72` and no byte check.
+
+---
+
+## R37 — From this point, slices are accepted on the strength of the guardrails rather than line-by-line review
+
+**Chosen.** Every slice up to and including `POST /v1/users` was read in full by a human
+before it was committed, and that review is where a material share of this repository's
+corrections came from — a mis-stated invariant, a mechanism that guarded less than its
+name implied, a test that asserted a route into existence, an over-built design for a
+service that is never deployed. None of those was found by the compiler or the suite.
+
+**Review capacity ran out here.** The remaining slices are accepted on the strength of the
+mechanisms, the recorded plan, and the tests, with lighter reading than the earlier ones
+received. This entry exists because that is a change in how the work is being assured, and
+an undocumented change in assurance is worse than a documented reduction in it.
+
+**What still holds without a reader.** These are mechanical and do not depend on anyone's
+attention:
+
+| Property | What enforces it |
+|---|---|
+| Every `Result` is handled | the handler adapter — a dropped error channel does not typecheck |
+| A new error kind gets a status and a level | `Record` over the union, failing in both files that own a decision |
+| No persistence entity or password hash in a response | `additionalProperties: false` on the response schemas, checked on every response |
+| Unknown keys at ingress | `additionalProperties: false`, verified including `__proto__` |
+| An application write to a trigger-maintained timestamp | `ColumnType<Date, never, never>`, pinned in both directions |
+| A schema that silently loses its inferred type | `validator-for.type-assertions.ts` |
+| A `Result` bound to an unmarked name | the type-aware lint rule |
+| Money converted without validation | `Pennies` is unobtainable except through `toPennies` |
+
+**What does not hold, and this is the part that matters.** The guardrails check
+*structure*, not *meaning*. Nothing mechanical distinguishes a correct ownership decision
+from an incorrect one: A2 makes exactly this point — 403 where the specification says 404
+looks correct and passes a happy-path test. The remaining slices contain the ownership
+check (step 4), its extraction (step 5) and the withdrawal's 404-versus-422 distinction
+(step 6), which are the three most semantics-dependent decisions in the build. They arrive
+after the review that would have caught a mistake in them.
+
+The other uncovered classes are already catalogued and are not repeated here: **R16**
+(nothing forces a new boundary through the validation funnel), **R17** (a discarded
+`Result`), **R24** (the payload ban guards one key name), **R28** (the naming rule's blind
+spots) and **R35** (a handler's body type is not checked against its response schema).
+
+**How you would trigger it.** Any defect whose symptom is a passing test that asserts the
+wrong thing.
+
+**What limits it.** The acceptance criteria for every remaining endpoint are written as
+scenarios in the requirements rather than inferred, including each sad path, and section 3
+requires a sad-path test per endpoint. Where review would have asked "is this the right
+status", there is a written scenario naming the status. That is a weaker check than a
+reader — it cannot notice what the scenarios do not mention — but it is not nothing, and
+it is the reason the remaining work is a reduction in assurance rather than an absence of
+it.
+
+**What closes it.** A review pass over the slices built after this entry, reading for
+semantics rather than for structure, with the ownership check and the withdrawal's status
+distinction as its two priorities.
