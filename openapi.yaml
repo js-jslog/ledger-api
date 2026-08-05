@@ -871,6 +871,7 @@ components:
         password:
           type: string
           minLength: 12
+          maxLength: 72
           writeOnly: true
     UpdateUserRequest:
       type: object

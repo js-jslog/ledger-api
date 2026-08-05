@@ -1,13 +1,22 @@
 import express, { type Express } from 'express'
 import request from 'supertest'
-import { describe, expect, test } from 'vitest'
+import { afterAll, describe, expect, test } from 'vitest'
 
 import { capturedLogs } from '../../test/observability/captured-logs.js'
+import { connect, testDatabaseUrl } from '../db/connection.js'
 import { correlationMiddleware } from '../observability/correlation.js'
 import { createApp } from './app.js'
 import { errorMiddleware, notFoundFallback } from './error-middleware.js'
 import { publicHandler } from './handler.js'
 import { validatorFor } from './validator-for.js'
+
+// None of these tests reads a table, but `createApp` composes the whole service graph
+// and so needs a handle. Its own pool, destroyed at the end of the file. R12.
+const db = connect(testDatabaseUrl())
+
+afterAll(async () => {
+  await db.destroy()
+})
 
 /**
  * A harness rather than a second composition root. It exists only because the routes
@@ -35,7 +44,7 @@ const records = capturedLogs()
 
 describe('the 404 fallback', () => {
   test('answers an unmatched route with the envelope, through the real app', async () => {
-    const response = await request(createApp()).get('/nope')
+    const response = await request(createApp(db)).get('/nope')
 
     expect(response.status).toBe(404)
     expect(response.body).toEqual({
@@ -45,7 +54,7 @@ describe('the 404 fallback', () => {
   })
 
   test('does not reflect the requested path back to the caller', async () => {
-    const response = await request(createApp()).get('/x-marks-the-spot')
+    const response = await request(createApp(db)).get('/x-marks-the-spot')
 
     expect(response.text).not.toContain('x-marks-the-spot')
   })
@@ -54,13 +63,13 @@ describe('the 404 fallback', () => {
     // The whole test. `app.use('*')` and `app.all('*')` both throw under path-to-regexp
     // v8, so a path-less `app.use` is not a stylistic choice — the alternatives take the
     // process down before it serves anything, which is what this asserts by not failing.
-    expect(() => createApp()).not.toThrow()
+    expect(() => createApp(db)).not.toThrow()
   })
 })
 
 describe('malformed JSON', () => {
   test('is a 400 carrying details, not body-parser default of a bare 400', async () => {
-    const response = await request(createApp())
+    const response = await request(createApp(db))
       .post('/anything')
       .set('content-type', 'application/json')
       .send('{"email":')
@@ -82,7 +91,7 @@ describe('malformed JSON', () => {
     // reaches the parser whether or not the endpoint it was addressed to exists.
     const password = 'correct-horse-battery-staple'
 
-    const response = await request(createApp())
+    const response = await request(createApp(db))
       .post('/no-such-route')
       .set('content-type', 'application/json')
       .send(`{"password":"${password}"`)
@@ -95,7 +104,7 @@ describe('malformed JSON', () => {
 
 describe('a body over the limit', () => {
   test('is a client error rather than a 500', async () => {
-    const response = await request(createApp())
+    const response = await request(createApp(db))
       .post('/anything')
       .set('content-type', 'application/json')
       .send(JSON.stringify({ padding: 'x'.repeat(20_000) }))
@@ -209,7 +218,7 @@ describe('the handler adapter', () => {
     appWith((a) => {
       a.post(
         '/echo',
-        publicHandler((req) =>
+        publicHandler(schema, (req) =>
           Promise.resolve(validate_bodyRz(req.body).map((body) => ({ status: 201 as const, body }))),
         ),
       )
@@ -242,6 +251,37 @@ describe('the handler adapter', () => {
 
     expect(response.status).toBe(400)
   })
+
+  /**
+   * The adapter `await`s the function it wraps, so a service that throws rather than
+   * returning `err` rejects the async Express handler rather than reaching `.match()`.
+   * Whether that becomes a 500 or an unhandled rejection is a property of Express, not
+   * of anything written here — the reference implementation guards it with an explicit
+   * `.catch(next)`, which is the Express 4 shape.
+   *
+   * Measured rather than reasoned about, because it was reasoned about first and the
+   * reasoning was wrong: Express 5 propagates the rejection to the error middleware and
+   * the envelope comes out intact. This test is what stops that becoming true only
+   * until someone changes the adapter.
+   */
+  test('turns a service that throws into the same 500 envelope', async () => {
+    const throwing = appWith((a) => {
+      a.get(
+        '/throws',
+        publicHandler(schema, () => {
+          throw new Error('the service exploded')
+        }),
+      )
+    })
+
+    const response = await request(throwing).get('/throws')
+
+    expect(response.status).toBe(500)
+    expect(response.body).toEqual({
+      message: 'An unexpected error occurred',
+      correlationId: response.headers['x-correlation-id'],
+    })
+  })
 })
 
 describe('the correlation id', () => {
@@ -267,14 +307,14 @@ describe('the correlation id', () => {
   })
 
   test('is echoed on a successful response too, not only on failures', async () => {
-    const response = await request(createApp()).get('/health')
+    const response = await request(createApp(db)).get('/health')
 
     expect(response.status).toBe(200)
     expect(response.headers['x-correlation-id']).toMatch(/^[0-9a-f-]{36}$/)
   })
 
   test('matches the envelope on a failure', async () => {
-    const response = await request(createApp()).get('/nope')
+    const response = await request(createApp(db)).get('/nope')
 
     expect(response.body).toEqual({
       message: 'Resource not found',
@@ -283,7 +323,7 @@ describe('the correlation id', () => {
   })
 
   test('differs between requests', async () => {
-    const app = createApp()
+    const app = createApp(db)
 
     const first = await request(app).get('/nope')
     const second = await request(app).get('/nope')
@@ -309,7 +349,7 @@ describe('the correlation id', () => {
   })
 
   test('follows the kind rather than being fixed, so a client mistake is not an alert', async () => {
-    await request(createApp()).get('/nope')
+    await request(createApp(db)).get('/nope')
 
     expect(records().map((record) => record['level'])).toEqual(['info', 'info'])
   })

@@ -14,7 +14,9 @@
  */
 import type { Result } from 'neverthrow'
 
-import { validatorFor } from './validator-for.js'
+import { userResponseSchema } from './response-schemas.js'
+import { createUserSchema } from './schemas.js'
+import { responseValidatorFor, validatorFor } from './validator-for.js'
 
 /** True only for `unknown`. `any` is excluded, or it would satisfy every assertion. */
 type IsAny<T> = 0 extends 1 & T ? true : false
@@ -37,6 +39,19 @@ const _properSchema = {
 } as const satisfies Record<string, unknown>
 
 assertNotUnknown<IsUnknown<ValidatedBody<ReturnType<typeof validatorFor<typeof _properSchema>>>>>()
+
+// The schemas the service actually validates against, ingress and egress. The egress
+// half is covered for the same reason as the ingress half: `responseValidatorFor` infers
+// from its argument identically, so a response schema that lost its `as const` would
+// degrade in the same silence.
+
+assertNotUnknown<
+  IsUnknown<ValidatedBody<ReturnType<typeof validatorFor<typeof createUserSchema>>>>
+>()
+
+assertNotUnknown<
+  IsUnknown<ValidatedBody<ReturnType<typeof responseValidatorFor<typeof userResponseSchema>>>>
+>()
 
 // ── The proof that the assertion can fail ────────────────────────────────────────
 // Without this, the check above could be vacuously true and nobody would know. The

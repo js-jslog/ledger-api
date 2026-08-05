@@ -12,6 +12,12 @@ export default defineConfig({
     // safe to reset between them.
     fileParallelism: false,
 
+    // The suite hashes a password for every user it creates, and bcrypt is fully
+    // serialised: at the default cost of 12 that dominates the run. 4 is the floor
+    // bcryptjs accepts. Set here rather than behind a `NODE_ENV` branch, so the code the
+    // suite exercises is the code that runs.
+    env: { BCRYPT_COST: '4' },
+
     // `isolate` is deliberately left at its default of `true`, which forks a fresh
     // process per file even with `fileParallelism: false`.
     //

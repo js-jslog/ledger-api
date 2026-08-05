@@ -3,7 +3,7 @@ import addFormatsCjs from 'ajv-formats'
 import type { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import { err, ok, type Result } from 'neverthrow'
 
-import { validationFailed, type DomainError, type FieldError } from '../domain/errors.js'
+import { unexpected, validationFailed, type DomainError, type FieldError } from '../domain/errors.js'
 import { isWithinScale } from '../domain/money.js'
 
 /**
@@ -118,5 +118,54 @@ export function validatorFor<S extends object>(
     // No cast needed. Ajv's validator is declared as a type guard, and returning early
     // on failure narrows `body` to `T` here by elimination.
     return ok(body)
+  }
+}
+
+/**
+ * The egress half. Same Ajv instance, same schema-is-the-source-of-truth shape, and one
+ * deliberate difference: a response that does not satisfy its published schema is a bug
+ * in this service rather than a mistake by the client, so it yields `Unexpected` — 500,
+ * never anything in the 4xx range.
+ *
+ * WHAT IT IS FOR, which is not "symmetry with ingress". `additionalProperties: false` on
+ * the response schemas is what turns section 3's "no persistence entity and no password
+ * hash ever reaches a response body" into a checked property. A leaked `password_hash`
+ * becomes a 500 instead of a disclosure.
+ *
+ * THE LOG CARRIES THE MISMATCH AND NOT THE BODY, and that is a correction to the
+ * reasoning in `errors.ts` rather than an oversight — see docs/divergences.md § Slice 2.
+ * Ajv names the offending property and the keyword it failed; the value is exactly the
+ * thing that must not be written down, because in the case this mechanism exists for it
+ * is a password hash.
+ */
+export function responseValidatorFor<S extends object>(
+  schema: S,
+): (body: unknown) => Result<FromSchema<S & JSONSchema>, DomainError> {
+  type T = FromSchema<S & JSONSchema>
+
+  const validate = ajv.compile<T>(schema)
+
+  return (body: unknown): Result<T, DomainError> => {
+    // The round trip is the mechanism, not a defensive copy, and it is in here rather
+    // than at the call site so that no caller can validate the wrong thing. Ajv's type
+    // checks are `typeof`-based, so a `Date` satisfies `type: 'object'` but fails
+    // `type: 'string', format: 'date-time'`; `undefined` values and symbol keys are
+    // dropped by `JSON.stringify` and never reach the client at all. Validating the
+    // in-memory object checks something nobody will receive — measured, see
+    // docs/divergences.md § Slice 2.
+    const serialised: unknown = JSON.parse(JSON.stringify(body))
+
+    if (!validate(serialised)) {
+      const mismatches = (validate.errors ?? []).map(
+        (error) => `${fieldOf(error)} ${error.message ?? 'is invalid'}`,
+      )
+
+      return err(
+        unexpected(new Error('Response body failed its published schema'), { mismatches }),
+      )
+    }
+
+    // The serialised form, so that what was checked is what gets sent.
+    return ok(serialised)
   }
 }

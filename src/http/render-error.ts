@@ -20,6 +20,7 @@ import { log } from '../observability/logger.js'
 const STATUSES: Record<DomainError['kind'], number> = {
   ValidationFailed: 400,
   NotFound: 404,
+  AlreadyExists: 409,
   Unexpected: 500,
 }
 

@@ -3,6 +3,7 @@ import type { Result } from 'neverthrow'
 
 import type { DomainError } from '../domain/errors.js'
 import { renderError } from './render-error.js'
+import { responseValidatorFor } from './validator-for.js'
 
 /**
  * Carrying the status alongside the body is what closes the silent-empty-success hole:
@@ -33,17 +34,36 @@ export type Success<T> = { readonly status: 200 | 201; readonly body: T }
  * The authenticated variant is not here. It arrives with the authenticator, at the step
  * that builds JWT verification — see docs/divergences.md § Slice 1.
  */
-export const publicHandler =
-  <T>(fn: (req: Request) => PromiseLike<Result<Success<T>, DomainError>>): RequestHandler =>
-  async (req, res) => {
+export const publicHandler = <S extends object, T>(
+  responseSchema: S,
+  fn: (req: Request) => PromiseLike<Result<Success<T>, DomainError>>,
+): RequestHandler => {
+  // Compiled once, when the route is registered, rather than once per request.
+  //
+  // Annotated as returning `Result<unknown, …>` rather than the schema's inferred type,
+  // and the annotation is load-bearing: inferring it here instantiates `FromSchema` over
+  // a still-generic `S` and TypeScript gives up with TS2589. Nothing is lost, because
+  // the adapter's question is whether the body conformed and not what shape conforming
+  // implies. R35.
+  const validateResponse: (body: unknown) => Result<unknown, DomainError> =
+    responseValidatorFor(responseSchema)
+
+  return async (req, res) => {
     const outcomeRz = await fn(req)
 
-    outcomeRz.match(
-      (success) => {
-        res.status(success.status).json(success.body)
-      },
-      (error) => {
-        renderError(res, error)
-      },
-    )
+    outcomeRz
+      // The validator returns the body it checked — the serialised form — so what is
+      // sent is what satisfied the schema rather than something equal to it.
+      .andThen((success) =>
+        validateResponse(success.body).map((body) => ({ status: success.status, body })),
+      )
+      .match(
+        (success) => {
+          res.status(success.status).json(success.body)
+        },
+        (error) => {
+          renderError(res, error)
+        },
+      )
   }
+}

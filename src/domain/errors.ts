@@ -19,6 +19,11 @@ type NotFound = {
   readonly message: string
 }
 
+type AlreadyExists = {
+  readonly kind: 'AlreadyExists'
+  readonly message: string
+}
+
 type Unexpected = {
   readonly kind: 'Unexpected'
   readonly message: string
@@ -27,6 +32,7 @@ type Unexpected = {
 export type DomainError = { readonly correlationId: string } & (
   | ValidationFailed
   | NotFound
+  | AlreadyExists
   | Unexpected
 )
 
@@ -53,8 +59,17 @@ export type DomainError = { readonly correlationId: string } & (
  * The asymmetry is deliberate and is carried by which constructor a call site reaches
  * for: ingress failures go through `validationFailed`, where the offending value is a
  * credential often enough that it must never be logged, while `unexpected` permits a
- * payload because the body it will carry is the service's own output, and when a
- * response fails its published schema that body is the entire diagnostic.
+ * payload because its detail is normally about the service rather than about the
+ * request.
+ *
+ * THE STATED REASON FOR THAT EXEMPTION WAS WRONG, and the first call site to test it
+ * proved so. It read: the body `unexpected` will carry is the service's own output, and
+ * when a response fails its published schema that body is the entire diagnostic. The
+ * response that fails its published schema is, in the case egress validation exists to
+ * catch, one carrying a leaked `password_hash` — so logging the body writes the secret
+ * to the log store instead of the wire, which is not a fix. `responseValidatorFor` logs
+ * Ajv's mismatches, which name the offending property and never its value. The
+ * permission stands; the justification does not. See docs/divergences.md § Slice 2.
  */
 type PayloadForbidden = LogFields & { readonly payload?: never }
 
@@ -65,6 +80,7 @@ type PayloadForbidden = LogFields & { readonly payload?: never }
 const LEVELS: Record<DomainError['kind'], Level> = {
   ValidationFailed: 'info',
   NotFound: 'info',
+  AlreadyExists: 'info',
   Unexpected: 'error',
 }
 
@@ -91,6 +107,9 @@ export const validationFailed = (
 
 export const notFound = (message: string, fields: PayloadForbidden = {}): DomainError =>
   born({ kind: 'NotFound', message }, fields)
+
+export const alreadyExists = (message: string, fields: PayloadForbidden = {}): DomainError =>
+  born({ kind: 'AlreadyExists', message }, fields)
 
 const describeCause = (cause: unknown): LogFields =>
   cause instanceof Error
