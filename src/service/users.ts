@@ -69,7 +69,7 @@ export const usersService = (repo: UsersRepository): UsersService => ({
    * 403 for a foreign one tells any authenticated caller which user ids exist. Collapsing
    * both to 404 would close that and is the usual advice; it also contradicts a written
    * scenario, and section 3 says the specification's 403/404 semantics are followed exactly.
-   * R41 records the leak, the alternative, and why it was not taken — so this is not a line
+   * R7 records the leak, the alternative, and why it was not taken — so this is not a line
    * to tidy up.
    */
   fetch_userRzA: (authenticatedUserId, userId) =>

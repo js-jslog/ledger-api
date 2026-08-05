@@ -1009,3 +1009,142 @@ possible state for someone copying a neighbouring line — both nearby examples 
 that skips authentication. **R39's route sweep is owed at the next step**, where the first
 authenticated route makes it non-vacuous, and it is cheap enough that it should not be traded
 against anything.
+
+---
+
+## Slice 4/5 — `GET /v1/users/{userId}`, the walkthrough, both account endpoints, the extraction
+
+**The reference was not consulted for this slice either**, which is recorded here so a gap
+is never mistaken for a clean comparison. A6 suspends the per-slice diff for passes A and B
+on the grounds that the pattern has been diffed twice against the same
+service/repository/handler shape and the returns were visibly diminishing. It resumes at
+the transaction slice, where `debitIfSufficient` and the single-transaction balance-plus-
+insert are content nothing else in this project covers.
+
+**A template slice by A6, with one exception**: the ownership semantics get full attention,
+because R37 names them as one of the three most semantics-dependent decisions left and they
+arrive after the review that would have caught a mistake in them.
+
+### The claim under test, and it is a document rather than a mechanism
+
+**That a walkthrough written before the endpoints is a test of them, rather than prose
+about them.** A3's rule gives it a failure condition: build the later endpoints through it,
+and a file touched that it does not name is a defect in it. So it was written after the
+first authenticated route and before the two account endpoints, and it claims outright that
+there is no step that is not on its list.
+
+**It failed, twice, and the second failure is the useful one.**
+
+| Touched, not named | What it was |
+|---|---|
+| `src/domain/ids.ts` | A new resource brings a new kind of identifier. A plain omission with no argument behind it. |
+| `src/domain/money.ts` | `toDecimal` did not exist — the account endpoint was the first thing in the service to render money outwards. |
+
+The second is a class rather than an instance. The walkthrough listed seven steps that are
+all *wiring*, and what it missed was a *domain gap*: the endpoint was the first to **do**
+something rather than the first to **expose** something. A list of files would have caught
+this one and missed the next, because the next endpoint to hit it will need a different
+function. So the correction states the discriminator and the file is only an example of it.
+
+**A third file was touched and is not a defect in the walkthrough.**
+`test/db/migration-pipeline.test.ts` asserted the applied migration names as a literal
+list, so adding the accounts table broke a test about the migration pipeline. That is a
+coupling with no reason to exist — the test's claim is that everything on disk reached the
+ledger — so it now reads the folder, and asserts that property for migrations nobody has
+written yet. Repaired rather than documented, which is a change to a slice reviewed at 0d
+and is flagged as one. The alternative was to name the file in the walkthrough and leave
+the coupling to bite again at the transactions migration.
+
+**One thing the walkthrough got right that was not obvious.** `truncateAll` needed no
+change. `truncate table users cascade` reaches `accounts` through the foreign key, which
+slice 2 wrote in anticipation and this slice cashed.
+
+### The ownership decision, which is what this slice is really for
+
+Built concretely at the user endpoint, again at the account endpoint, then extracted from
+the two. Deferring the extraction to the second case was A2's amended instruction and it
+paid: with one instance, "the owner is the resource's own id" reads as part of the pattern
+rather than as an accident of a user owning itself, and the account case would have had to
+bend around it. What the two together show is that exactly one thing varies.
+
+**403 and 404 are transcribed from the written scenarios rather than reasoned about.** Both
+statuses appear in `coding-test.txt` for both endpoints as separate scenarios, and section
+3 requires the specification's semantics exactly. Checked against the document rather than
+against memory of it, twice, because R37 says this is the decision no mechanism can check.
+
+### Verified in both directions, and the numbers are the point
+
+Every claim this slice makes was broken on purpose. What matters is not that something
+failed but that the *right count* failed — an assertion that fires on three unrelated
+breakages is not pinning any of them.
+
+| Broken | What noticed |
+|---|---|
+| Compare owner before resolving, users | exactly one test — the non-existent-user 404 |
+| Compare owner before resolving, accounts | exactly one test — the non-existent-account 404 |
+| The same, after the extraction | **both** of the above, from one edit |
+| The account lookup filtered by `user_id` | exactly one test — the 403 becomes a 404 |
+| `toDecimal` dropped from the account response | exactly one test — the non-zero balance |
+| A resource route registered with `publicHandler` | the route sweep |
+| An authenticated route named in the sweep's public list | the sweep, in the other direction, **and** its vacuity guard |
+
+The third row is the extraction's whole justification, stated as a measurement: before it,
+one reversal broke one endpoint; after it, there is one place to reverse and it breaks two.
+
+The last row is worth reading twice. The public list is maintained by hand, so the obvious
+way to defeat the sweep is to add a route to it — and doing that fails the reverse-direction
+test. Moving the *only* authenticated route into it additionally trips the vacuity guard,
+which is the assertion that exists because R39 predicted a sweep over an empty set as the
+failure mode.
+
+### Deliberate departures in 4/5
+
+- **A path parameter goes through the ingress funnel**, as `req.params` rather than as a
+  string, so Ajv reports the failure against the parameter's name. The specification puts a
+  `pattern` on the parameter and a `400` on an operation with no request body, so the path
+  parameter is the only thing that `400` can describe — and `docs/spec-changes.md` § 4
+  already reasons from that reading. A malformed id is therefore a 400 and not a 404. It is
+  also the fifth ingress point, and R16's gap — nothing forces a new boundary through the
+  funnel — was closed here by choice rather than by mechanism, which is R16 working as
+  described.
+- **The account number is minted in the repository, not the service**, which departs from
+  the users pattern where the service mints the id. Retrying a collision means re-minting,
+  so minting and inserting cannot be separated. A user id is unique by construction at 16
+  random bytes; an account number is unique by *checking*, against a keyspace of 10^6, and
+  that is a different kind of thing.
+- **`sort_code` and `currency` are constants rather than columns.** Both enumerate exactly
+  one value in the specification, and a column that can hold only one states a decision
+  nobody has taken. The response schema's `enum` is what fails loudly if either drifts.
+- **`balance` is `never` in the insert position.** The opening balance belongs to the
+  column default, so choosing one in application code is a compile error rather than a
+  decision taken in two places. It reads and updates as `Pennies`, which removes the cast
+  the repository would otherwise need at the boundary.
+- **The lookup does not filter by owner.** `where user_id = …` in the query would make a
+  foreign account indistinguishable from an absent one — 404 where the specification says
+  403. The authorisation decision needs the row in order to be made at all.
+- **The extracted function derives its messages from a noun** rather than taking both. This
+  is the one piece of mechanism in it that the two cases do not force. It buys a property
+  worth having: a 403 and a 404 phrased consistently across resources cannot drift into one
+  saying more than the other, and saying more is how the pair stops being a status
+  distinction and becomes an oracle — R7.
+- **The extraction has no tests of its own.** Both branches, for both resources, are already
+  exercised by the four endpoint tests that pin them, and a unit test over the same function
+  would assert the same thing a second time. The measurement above is what stands in for it.
+
+### Sad paths
+
+400 on a malformed user id and on a malformed account number, each naming the parameter;
+400 on a missing `accountType`; 400 on an `accountType` the specification does not publish;
+400 on a caller-supplied opening balance, which is the mass-assignment case; 403 on another
+user's details and on another user's account; 404 on a well-formed user id and account
+number that do not exist; 401 with no token, asserted to arrive *before* the endpoint has an
+opinion about a malformed path parameter.
+
+### Two things to carry forward
+
+- **The `integer` balance column has a ceiling of about £21.4m**, which R9 now records as a
+  second ceiling with a worse failure mode than the published one: an overflow is a 500 with
+  no useful message. The honest fix belongs with the deposit endpoint, where a ceiling and
+  the status for breaching it can be decided together.
+- **The retry loop has no test that makes it iterate**, because the minter has no seam.
+  **R41**, and the constraint name it depends on is pinned even though the loop is not.

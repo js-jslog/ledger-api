@@ -68,6 +68,7 @@ and the reasoning is entry R34.
 | R38 | The token has no lifecycle: no refresh, no revocation, no rotation | **High in production** | n/a — the named gap in delivery scope |
 | R39 | Which adapter a route is registered with is a decision nothing checks | Medium | On the first authenticated route added carelessly |
 | R40 | The login timing equalisation has no test, and its removal is silent | Low | Only if someone deletes it as dead work |
+| R41 | The account-number retry loop is never exercised by a test | Low | Only if someone deletes it as dead work |
 
 ---
 
@@ -242,6 +243,27 @@ It was not taken here because the specification defines the 403 behaviour
 explicitly across seven endpoints, and conformance to the supplied specification
 is the stated requirement. Deviating silently would be worse than either option.
 
+> **Built at slices 4 and 5, and the entry needs two things added rather than changed.**
+>
+> **The keyspace figure is no longer hypothetical.** Account numbers are minted against
+> `^01\d{6}$`, so the 10^6 above is exactly right, and they are random rather than
+> sequential — which raises the cost of enumeration not at all, since the attack walks the
+> keyspace rather than guessing the next issue.
+>
+> **The requirements say the same thing the specification does, which removes the last
+> reason to reconsider.** This entry rests on conformance to `openapi.yaml`. The
+> accompanying requirements independently name Forbidden for another user's resource and
+> Not Found for one that does not exist, as separate written scenarios for both the user
+> and the account endpoints. Two documents agreeing is a stronger basis than one, and it
+> means the security-conservative alternative would now contradict an acceptance criterion
+> rather than merely a schema.
+>
+> **Where it lives.** One place: `owned_resourceRz` in `src/service/ownership.ts`. Before
+> the extraction the ordering was written out at each call site, so this entry described a
+> property distributed across the services; it now describes four lines. That also means
+> the alternative is a cheaper change than it was — closing this is now an edit to one
+> function rather than a sweep.
+
 ---
 
 ## R8 — £0 transactions are accepted
@@ -289,6 +311,24 @@ deposit; ignoring it means serving a body that fails the published schema. The
 deviation chosen is the one that keeps every request/response pair
 self-consistent. A real system would define a ceiling *and* the status for
 breaching it, most likely 422.
+
+> **Amended at slice 5, because the balance is not in fact unbounded.** The entry above
+> says the balance "is allowed to grow", which is true of the schema and false of the
+> column. `balance` is an `integer` — chosen because `bigint` and `numeric` both return
+> strings from the driver and make the Kysely declaration a lie `strict: true` cannot
+> catch — so the real ceiling is 2,147,483,647 pennies, a shade over £21.4m.
+>
+> That is a second ceiling with a worse failure mode than the first: exceeding the
+> specification's £10,000 produces a body a generated client may reject, while exceeding
+> this one produces a Postgres overflow that surfaces as a 500 with no useful message. It
+> is unreachable at £10,000 per deposit without about 2,148 of them, so it is a real limit
+> rather than a likely one.
+>
+> Not closed, and the reason is that both plausible closures cost more than the risk. A
+> `bigint` column reinstates the string problem; a check constraint turns the overflow into
+> a different 500. The honest fix arrives with the deposit endpoint, where a ceiling and
+> the status for breaching it can be decided together — which is the same conclusion the
+> paragraph above reaches for the published maximum.
 
 ---
 
@@ -1404,6 +1444,25 @@ it.
 semantics rather than for structure, with the ownership check and the withdrawal's status
 distinction as its two priorities.
 
+> **Two of the three named decisions have now been taken, and this is the record of how.**
+> The ownership check and its extraction landed at slices 4 and 5. The withdrawal's
+> 404-versus-422 is the one still outstanding.
+>
+> **What stood in for a reader.** The acceptance criteria were transcribed from the written
+> scenarios rather than inferred, which is what this entry predicted would carry the weight.
+> Beyond that, every claim the two slices make was broken on purpose and the failures
+> counted, because a passing suite says nothing about whether an assertion is load-bearing:
+> reversing the ownership order fails exactly one test per endpoint and nothing else, and
+> after the extraction it fails both at once. Dropping `toDecimal` fails exactly one test,
+> which is why that test exists. Those numbers are in `docs/divergences.md` § Slice 4/5.
+>
+> **What this does not amount to.** Counting which test fails proves an assertion has a
+> witness. It cannot prove the assertion asserts the right thing — if a status were
+> transcribed wrongly from the scenarios, the test would encode the same mistake and the
+> falsification would confirm it just as neatly. That is the gap this entry describes and
+> it is unchanged; the transcription is what was checked twice, against
+> `coding-test.txt` directly rather than against memory of it.
+
 ---
 
 ## R38 — The token has no lifecycle: no refresh, no revocation, no rotation
@@ -1483,6 +1542,30 @@ sweep would assert over an empty set and pass while checking nothing — which i
 absent, because it looks like coverage. It belongs with the first authenticated route, at
 the next step.
 
+> **Closed at slice 4, and this entry is kept rather than deleted because the gap is
+> instructive and the closure is not total.** `src/http/app.test.ts` reads the registered
+> routes off `createApp`, drives each one with no `Authorization` header, and requires a
+> 401. Three named public routes are the exceptions.
+>
+> **Verified in three directions rather than assumed.** Registering a resource route with
+> `publicHandler` fails the sweep. Naming an authenticated route in the public list fails
+> it too — in the other direction, which is what stops the list from being a way to silence
+> the file. And moving the only authenticated route into that list additionally trips the
+> vacuity guard, which is the assertion that exists because a sweep over an empty set is
+> the failure mode this entry predicted.
+>
+> It caught nothing when it was written, which is the expected outcome for a mechanism
+> built to hold a decision rather than to find a bug. What it did do at slice 5 is cover
+> both account routes with no edit to the file, which is the property that distinguishes a
+> sweep from three per-route tests.
+>
+> **What it still does not cover.** It reads an undocumented Express internal
+> (`app.router.stack`), so an Express upgrade could make it enumerate nothing — and an
+> empty enumeration is caught by the vacuity guard rather than passing silently, which is
+> exactly why that guard is there. It also proves only that authentication runs; it says
+> nothing about whether the route then authorises correctly, which is R7's and
+> `owned_resourceRz`'s business.
+
 ---
 
 ## R40 — The login timing equalisation has no test, and its removal is silent
@@ -1519,3 +1602,40 @@ enough margin to be stable — plausible, and more machinery than the property i
 or a structural test: inject a repository that records whether a comparison was attempted,
 and assert it was, on both paths. The second is cheap and checks the mechanism rather than
 its consequence, which is the weaker claim but the one that does not flake.
+
+---
+
+## R41 — The account-number retry loop is never exercised, and its removal is nearly silent
+
+**Chosen.** `src/repo/accounts.ts` inserts an account under a loop that mints a fresh
+number and retries when the insert fails with a unique violation on `accounts_pkey`. It
+retries twice and then gives up. Nothing in the test suite ever causes the loop to iterate.
+
+**Why it cannot be exercised as written.** The number is minted inside the repository, on
+the line that inserts it. There is no seam to control it: no injected generator, no clock,
+nothing a test can pin. Forcing a collision would mean opening one in production code for
+the benefit of a test, which slice 3 already declined for the same reason when it kept the
+claims schema out of a seam of its own.
+
+**What it costs.** The loop is the only thing standing between two requests minting the
+same number in the same instant and a 500 for one of them. It is one `if` and a `for`, it
+has no test, and someone tidying an unfamiliar file could reasonably read a loop that never
+loops as dead work — the same shape as **R40**, and the reason both entries exist.
+
+**It is only *nearly* silent, which is the difference from R40.** The constraint name the
+matcher depends on *is* pinned: `src/http/accounts.test.ts` inserts a duplicate account
+number directly and asserts the driver reports `23505` on `accounts_pkey`. So the failure
+mode where the primary key is renamed and the match silently stops working is covered. The
+uncovered half is deleting or inverting the loop itself.
+
+**How you would trigger it.** Two concurrent `POST /v1/accounts` that mint the same number.
+At 10^6 numbers this needs either a large table or bad luck, and it becomes likelier in
+exactly the conditions where it matters. With the loop removed, one of the two requests
+answers 500 and the client has no way to tell it should simply retry.
+
+**What closes it.** Inject the minter into `accountsRepository`, defaulting to
+`newAccountNumber`, and have a test pass one that returns a fixed number twice and then a
+fresh one. That is a real seam rather than a test-only branch — the repository already
+takes its database handle the same way — and it makes the loop's behaviour assertable
+without changing what production wires up. Roughly ten lines, and it was not done here
+because the collision it guards is itself the cheaper thing to reason about than the seam.
