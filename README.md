@@ -1,5 +1,27 @@
 # Ledger API
 
+## Approach
+
+I have taken an engineering leadership approach to delivering this solution with the goal of
+exercising the skills relevant to the Staff Engineer role. The focus has been on identifying goals,
+formalising a plan, mitigating & recording risks, surfacing blocking problems early, decision-making
+& course correction as the plan is executed, and delivering on the arranged day to the recruiting
+agent.
+
+I have chosen to write the code in TypeScript for two reasons:
+
+1. My own familiarity, which will result in more fluid demonstrations wherever code walkthroughs are
+   required.
+2. The opportunity to demonstrate that I solve problems which Java is more prepared for than TS, not
+   because they are easy, but because they are important. These decisions are more visible using TS.
+
+Note: I will add a reference section to identify what my principal areas of ownership are, and where
+they are on display in the codebase. This is a placeholder so that I can hand over this project as
+deliverable to the recruiting agent, on schedule, with just that reference section to be added later
+in preparation for an interview.
+
+## Functional deliverable
+
 A REST API for a retail bank: users, accounts and transactions. Express 5 and Postgres,
 in TypeScript, against the specification in `openapi.yaml`.
 
