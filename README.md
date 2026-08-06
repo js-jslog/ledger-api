@@ -35,9 +35,22 @@ Then `curl localhost:3000/health`, which answers `{"status":"ok"}`. `PORT` overr
 port.
 
 Nothing but Node and pnpm is required for this path — the devcontainer in
-`.devcontainer/` is one way to get a working toolchain, never a requirement. The database
-below is separate: the service starts and answers `/health` without it, and every endpoint
-that touches data needs it.
+`.devcontainer/` is one way to get a working toolchain, never a requirement. The
+`Dockerfile` at the repository root builds *that* development image — an editor and shell
+environment — rather than the service; there is no container image of this API, and the
+three commands above are how it runs. The database below is separate: the service starts
+and answers `/health` without it, and every endpoint that touches data needs it.
+
+The commit gate is opt-in per clone and does not install itself. Anyone intending to
+commit here wants:
+
+```
+git config core.hooksPath .githooks
+```
+
+which runs typecheck, lint and the full suite before each commit, and checks the message.
+Without it nothing runs and nothing says so — `docs/residual-risk-catalogue.md` R27 has
+the rest of that gap, including why the hooks are native rather than managed by a tool.
 
 `pnpm build` compiles to `dist/` rather than the service being run straight from source.
 Node executes TypeScript directly, but it does not rewrite import specifiers: this

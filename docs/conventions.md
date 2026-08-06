@@ -204,6 +204,17 @@ than deleted, because its claim is prospective — it is about any function whos
 part of its contract, including ones no test will exercise — and because deleting it is a
 change to a slice already reviewed.
 
+**Settled at the final pass, because an open question left in a document at submission is
+worse than either answer.** The comment stays, and the second of the two reasons above is
+not the one that decides it — "a slice already reviewed" is an argument about cost, and it
+expires. The reason that holds is the first one. What the measurement established is that
+the error handler *this repository has today* fails loudly when its fourth parameter goes;
+it did not establish that every function whose arity is part of its contract would, and
+the comment's claim is about those. The linter also still actively advises the deletion,
+and no test can be written against advice — the suite can only object after someone has
+taken it. So the counter-example above survives its own falsification with a narrower
+basis than it was written with, which is recorded here rather than left as a loose end.
+
 ---
 
 ## Evidence: absence of an error is not evidence
@@ -267,7 +278,9 @@ is the stronger property.
 
 Configurable values are read where they are used, through a function taking `env` with a
 committed default — `src/db/connection.ts` is the pattern. There is no configuration
-module; with three such values there is nothing for one to centralise.
+module; with four such values there is nothing for one to centralise. They are named
+together in the README, along with the two that look configurable and deliberately are
+not.
 
 **Never branch on `NODE_ENV === 'test'`.** A value that must differ under test belongs in
 an environment variable the test runner sets, not in a branch. A branch means the code the
