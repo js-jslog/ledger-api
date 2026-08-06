@@ -58,7 +58,7 @@ linux or macOS (although you will have to make a counterpart to the runcontainer
 
 ```
 git clone https://github.com/js-jslog/ledger-api.git
-./runcontainer.ps1 start
+cd ledger-api && ./runcontainer.ps1 start
 ```
 
 ## Demonstrating the endpoints
