@@ -61,6 +61,24 @@ git clone https://github.com/js-jslog/ledger-api.git
 ./runcontainer.ps1 start
 ```
 
+## Demonstrating the endpoints
+
+The integration tests are where all of the time has been spent in ensuring the health of the
+endpoints. There is a full service to run which is expected to satisfy the spec also, but
+all that is additionally covered by that is the build and entrypoint work correctly which is
+really just a typescript config test.
+
+Interrogating the code and the tests is also probably the most direct way to test understanding
+of the solution.
+
+For both of these reasons, these instructions preceed the service running instructions.
+
+```
+pnpm install --frozen-lockfile
+docker compose up -d --wait
+pnpm test
+```
+
 ## Running the service
 
 ```
