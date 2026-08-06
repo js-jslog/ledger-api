@@ -105,6 +105,13 @@ service depends on that type and never on Kysely, so column names and driver err
 stop here. A row that is not there comes back as `undefined` rather than as an error: the
 repository reports what it found, and which status that deserves is step 4's decision.
 
+The table is not always the resource. `POST .../transactions` writes a transaction row and
+changes a balance, so it touches two, and the rule is that whatever must happen together
+lives in one method with the database transaction inside it — `record_transactionRzA` in
+`src/repo/transactions.ts` opens the boundary and calls `debitIfSufficient` from
+`src/repo/accounts.ts` within it. Note what is *not* on either port: the balance change
+alone. A service that could reach it could move money and write no ledger row.
+
 **4. A service method, in `src/service/<resource>.ts`,** returning
 `ResultAsync<Body, DomainError>`. If the endpoint reaches a resource by an id the client
 supplied, do not write the ownership check — call it:
@@ -136,6 +143,27 @@ answers is registered there, one line each.
 
 **7. Tests, in `src/http/<resource>.test.ts`** — the happy path and at least one sad path.
 Nothing generates them and nothing checks that they exist.
+
+Occasionally a decision the endpoint makes cannot be reached from outside. The withdrawal
+answers 404 rather than 422 when the account row has gone between the ownership check and
+the debit, and no request can produce that, because this service publishes nothing that
+deletes an account. Deleting the branch left all of the tests passing. Where that happens,
+the test belongs beside the code that makes the decision — `src/repo/accounts.test.ts` is
+the only one in this project — rather than nowhere.
+
+**8. Whatever the endpoint claims that nothing executes.** The seven steps above make it
+work; this one keeps it honest, and it is the step most easily skipped because everything is
+already green when you reach it.
+
+Two files hold those claims. Every schema goes in `src/http/validator-for.type-assertions.ts`,
+because a schema that lost its `as const` still validates at runtime and silently stops
+carrying a type. A guarantee expressed in the Kysely declaration goes in
+`src/db/schema.type-assertions.ts` — `transactions` is append-only because every column
+declares `never` in the update position, and nothing at runtime would ever report that
+being lost.
+
+The test for whether something belongs here: if this property broke, what would fail? If the
+answer is "nothing, until someone notices", it belongs in one of those two files.
 
 ### What you do not touch
 
