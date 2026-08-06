@@ -150,6 +150,17 @@ rather than a silent field write.
 precisely what makes R1 unreachable. The vulnerable half shipped and the half that
 triggers it did not. That is a coincidence of scoping, not a mitigation.
 
+> **Amended at the final read. The scope sentence above was overtaken and never updated.**
+>
+> "Create and fetch for all three resources, plus login and the two list endpoints" was
+> written when the list endpoints were still in scope. They were subsequently deferred,
+> and **R34 is where that decision lives**. The delivered set is create and fetch for
+> users, accounts and transactions, plus login — seven endpoints, not nine.
+>
+> Nothing else in this entry depends on the miscount: the `PATCH` and `DELETE` reasoning,
+> and the observation that deferring the account delete is what makes R1 unreachable, are
+> unaffected either way.
+
 ---
 
 ## R3 — No idempotency on transaction creation
@@ -195,6 +206,20 @@ transactions, and list them.
 list has, and skips or duplicates rows when new transactions arrive between pages.
 Requires adding fields to the response schema, so it is also a specification
 change.
+
+> **Amended at the final read: this entry claimed a pointer that does not exist.**
+>
+> "That includes anyone following the README walkthrough, which is why the walkthrough
+> points here" was written as an expectation and never became true. The walkthrough cites
+> **R34** and not this entry, and on inspection it should not cite this one: its worked
+> example is `GET /v1/accounts`, and the risk here is the *transaction* list. An account
+> list is bounded by how many accounts one user holds; a transaction list is not, which is
+> the whole of the difference.
+>
+> So the inheritance this entry describes is real but narrower than it claimed. It falls
+> on whoever builds `GET /v1/accounts/{accountNumber}/transactions`, which the walkthrough
+> does not build and does not describe. The sentence is left above rather than edited out,
+> because a forward reference that was never honoured is worth seeing.
 
 ---
 
@@ -720,6 +745,42 @@ rehearsal before submission exists specifically to prove the reviewer's path
 works. Nothing further is needed unless pnpm's own configuration keys move again —
 which they did between 10 and 11, and which is why the tool version is pinned
 rather than left to whatever the reviewer has.
+
+> **The rehearsal happened, and it found this live. The trigger named above is not the
+> only one, and the one it missed is the one that fired.**
+>
+> A genuine cold install — `node_modules` deleted, then
+> `pnpm install --frozen-lockfile` — reported `ERR_PNPM_IGNORED_BUILDS` for esbuild and
+> rewrote `allowBuilds: {}` into the placeholder described above, after which every `pnpm`
+> script failed inside `runDepsStatusCheck`. The reviewer's first command, on the tree as
+> it stood.
+>
+> **"No package in this tree declares an install script" was false, and had been since
+> slice 0e.** The paragraph above notes that `tsx` was installed and "since evaluated and
+> declined" — what it missed is that declining it removed it from `package.json` and not
+> from the lockfile, where it survived as a *resolved optional peer* of vite, baked into
+> every vitest resolution key. It brought `esbuild`, whose `postinstall` armed the gate.
+> The claim about rolldown was correct throughout and is not what failed: vite's real
+> dependency is rolldown, and esbuild was residue rather than a transform path.
+>
+> **So there is a third trigger, and it is the least visible of the three.** Not omitting
+> the file, and not adding a dependency with a build script, but *removing* one — the
+> lockfile keeps the peer resolution the removed package caused, so a dependency that is
+> gone from the manifest can still arm the gate. Nothing reports it until an install that
+> actually does work, which is why a populated `node_modules` hid it for four slices and a
+> green suite said nothing.
+>
+> **Closed by regenerating the lockfile** from the unchanged `package.json`, which drops
+> esbuild, tsx and tslib and restores `allowBuilds: {}` to being empty by measurement.
+> Allowlisting esbuild was the alternative and was declined: it would have recorded a
+> build script this project does not want and falsified the accurate half of the paragraph
+> above.
+>
+> **What this says about the entry rather than about pnpm.** "Both prerequisites are in
+> the README and the rehearsal proves the reviewer's path works" was doing more work than
+> it looked. The rehearsal is not a formality at the end of the build — it is the only
+> check that runs the reviewer's actual first command against the actual committed tree,
+> and it is the sole reason this was found before submission rather than by them.
 
 ---
 
@@ -1265,6 +1326,27 @@ every file, which removes the opt-in — at the cost of a connection pool in fil
 never touch the database, which is R12 pulling the other way. With one writing file the
 trade is not yet worth taking; it becomes worth taking somewhere around the third.
 
+> **Amended at the final read. This entry's own threshold has been crossed, and it says so
+> without having noticed.**
+>
+> "Exactly one file touches the database" and "with one writing file" were true when this
+> was written. **Five files now call `truncateAll`** — `src/http/users.test.ts`,
+> `auth.test.ts`, `accounts.test.ts`, `transactions.test.ts` and `src/repo/accounts.test.ts`
+> — so the paragraph above sets a threshold at three and the suite is past it.
+>
+> **Not taken anyway, and the reason has changed rather than merely survived.** The trade
+> was priced against R12, which at the time was a theoretical connection ceiling; R12's own
+> amendment has since made it concrete, and `POOL_MAX` bounds each pool at five precisely
+> because connection count turned out to bite. A `setupFiles` truncate would give a pool to
+> every test file including the six that never touch the database, which pushes directly
+> against the measurement that fixed a real intermittent failure. Closing the opt-in would
+> now cost something that has already been observed to fail rather than something projected.
+>
+> **What holds the gap in the meantime is unchanged and is weaker than a mechanism.** Every
+> writing file has the `beforeEach` because someone wrote it, and nothing enforces that a
+> new one does. The verification two paragraphs above is still the evidence that the call
+> is load-bearing where it is present.
+
 ---
 
 ## R32 — Local development credentials are committed in `compose.yml`
@@ -1427,6 +1509,26 @@ than a generic one, or a per-route type-level assertion in the style of
 registration site. The second is cheap and does not fight the inference; it was not built
 because there is currently one route to pin, and a mechanism justified by one instance is
 the thing A2 warns about.
+
+> **Amended at the final read: the argument for not building it has expired, and the
+> decision is now a different one.**
+>
+> "There is currently one route to pin" was true when written. `src/http/app.ts` now
+> registers **eight** routes, seven of them under `/v1`, so A2's objection — that a
+> mechanism justified by a single instance is a guess at an abstraction — no longer
+> applies. Eight instances is the condition under which A2 says to extract, not the
+> condition under which it says to wait.
+>
+> **Still not built, and this is a scope decision rather than the design one above.** It
+> is new machinery, and step 8 adds none; a type-level assertion per registration site is
+> also exactly the kind of thing that is cheap to write and easy to write wrongly on a
+> pass with no review capacity left behind it (R37). What limits the damage is unchanged
+> and is stated above: egress validation catches a mismatched pair on the first request
+> through the route, as a 500 naming the offending properties, so this is a defect caught
+> late rather than one that escapes.
+>
+> **The honest statement is that this is now the cheapest unbuilt improvement in this
+> catalogue**, and that the reason it is unbuilt is the calendar rather than the design.
 
 ---
 
