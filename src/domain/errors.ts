@@ -34,6 +34,11 @@ type Forbidden = {
   readonly message: string
 }
 
+type InsufficientFunds = {
+  readonly kind: 'InsufficientFunds'
+  readonly message: string
+}
+
 type Unexpected = {
   readonly kind: 'Unexpected'
   readonly message: string
@@ -45,6 +50,7 @@ export type DomainError = { readonly correlationId: string } & (
   | AlreadyExists
   | Unauthenticated
   | Forbidden
+  | InsufficientFunds
   | Unexpected
 )
 
@@ -95,6 +101,7 @@ const LEVELS: Record<DomainError['kind'], Level> = {
   AlreadyExists: 'info',
   Unauthenticated: 'info',
   Forbidden: 'info',
+  InsufficientFunds: 'info',
   Unexpected: 'error',
 }
 
@@ -141,6 +148,20 @@ export const unauthenticated = (fields: PayloadForbidden = {}): DomainError =>
 
 export const forbidden = (message: string, fields: PayloadForbidden = {}): DomainError =>
   born({ kind: 'Forbidden', message }, fields)
+
+/**
+ * The second constructor to take no message, and for a weaker reason than `unauthenticated`'s
+ * — worth saying so, because the two look alike and only one of them is a security property.
+ * There is exactly one condition that raises this and the specification publishes the
+ * sentence for it, so a parameter would only be an opportunity to write a different one.
+ *
+ * It deliberately does not name the balance or the shortfall. That is not concealment: the
+ * caller has already passed the ownership check to get here, so they can fetch the balance
+ * from their own account. It is that a message computed from the row is a second place the
+ * balance is rendered, and the only one not covered by the egress schema.
+ */
+export const insufficientFunds = (fields: PayloadForbidden = {}): DomainError =>
+  born({ kind: 'InsufficientFunds', message: 'Insufficient funds to process transaction' }, fields)
 
 const describeCause = (cause: unknown): LogFields =>
   cause instanceof Error

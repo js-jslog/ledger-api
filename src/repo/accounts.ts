@@ -56,7 +56,7 @@ const isDuplicateAccountNumber = (cause: unknown): boolean =>
 /**
  * Three, and the number barely matters — which is the useful thing to know about it.
  *
- * With ten million account numbers, the chance of two consecutive collisions is the square
+ * With one million account numbers, the chance of two consecutive collisions is the square
  * of an already small number, so raising this to ten buys nothing measurable. What it is
  * for is the concurrent case: two requests minting the same number in the same instant is
  * a race no `select`-then-`insert` check would close, and one retry settles it. Exhausting
@@ -106,6 +106,82 @@ const toAccountRecord = (row: Selectable<AccountsTable>): AccountRecord => ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 })
+
+/**
+ * What the balance change did, reported rather than judged. Which status each of these
+ * deserves is the service's decision, for the reason the README's walkthrough gives at step
+ * 3 — and here that is more than a convention, because `accountGone` versus
+ * `insufficientFunds` is the taxonomy the whole design of this endpoint turns on.
+ */
+export type BalanceChange = 'applied' | 'insufficientFunds' | 'accountGone'
+
+/**
+ * THE WITHDRAWAL, AND IT TAKES NO BALANCE. The new value is computed from the row's current
+ * value inside the database, so passing in a balance read a moment ago would not be wrong
+ * today — it would merely look like a read-then-write, which is the shape that invites
+ * someone to "optimise" it into one. There is no parameter to pass it through, so reusing an
+ * earlier read is not expressible. Structural, not a comment.
+ *
+ * WHY THE ARITHMETIC IS SAFE WITHOUT A LOCK. Under READ COMMITTED, a second transaction
+ * updating this row blocks on the first's row lock, and when the first commits it does not
+ * proceed against its stale snapshot — it re-reads the row and re-evaluates this `where`
+ * clause against the committed balance. So the second withdrawal is tested against the
+ * balance the first one left. No lost update, and no explicit lock.
+ *
+ * WHY THE SECOND QUERY EXISTS, which is the correction this endpoint was designed around. A
+ * zero-row update does NOT mean insufficient funds. The ownership resolve ran earlier on a
+ * different connection, so anything that removed the row in between produces the same zero
+ * rows — and reporting that as 422 tells a client its account has insufficient funds when
+ * the account does not exist. The existence check runs only on the failure path and costs
+ * nothing on the happy one. It narrows that misreport to a window of microseconds; it does
+ * not eliminate it, and R1 records both the residual and the locking version that closes it.
+ */
+export const debitIfSufficient = async (
+  db: Kysely<Database>,
+  accountNumber: string,
+  amount: Pennies,
+): Promise<BalanceChange> => {
+  const debited = await db
+    .updateTable('accounts')
+    .set((eb) => ({ balance: eb('balance', '-', amount) }))
+    .where('account_number', '=', accountNumber)
+    .where('balance', '>=', amount)
+    .returning('balance')
+    .executeTakeFirst()
+
+  if (debited !== undefined) return 'applied'
+
+  return (await exists(db, accountNumber)) ? 'insufficientFunds' : 'accountGone'
+}
+
+/**
+ * The deposit's half, and the asymmetry is the whole of the difference between them: there
+ * is no condition on the balance, so zero rows has exactly one meaning and needs no
+ * follow-up query to interpret. It is still an `update … where account_number = $1` rather
+ * than a read and a write, for the same reason — the sum is computed from the row inside the
+ * database, so two concurrent deposits cannot lose one another.
+ */
+export const credit = async (
+  db: Kysely<Database>,
+  accountNumber: string,
+  amount: Pennies,
+): Promise<BalanceChange> => {
+  const credited = await db
+    .updateTable('accounts')
+    .set((eb) => ({ balance: eb('balance', '+', amount) }))
+    .where('account_number', '=', accountNumber)
+    .returning('balance')
+    .executeTakeFirst()
+
+  return credited === undefined ? 'accountGone' : 'applied'
+}
+
+const exists = async (db: Kysely<Database>, accountNumber: string): Promise<boolean> =>
+  (await db
+    .selectFrom('accounts')
+    .select('account_number')
+    .where('account_number', '=', accountNumber)
+    .executeTakeFirst()) !== undefined
 
 export const accountsRepository = (db: Kysely<Database>): AccountsRepository => ({
   create_accountRzA: (account) =>

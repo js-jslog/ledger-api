@@ -2,7 +2,7 @@ import type { FromSchema } from 'json-schema-to-ts'
 import type { ResultAsync } from 'neverthrow'
 
 import type { DomainError } from '../domain/errors.js'
-import { toDecimal } from '../domain/money.js'
+import { CURRENCY, toDecimal } from '../domain/money.js'
 import type { createAccountSchema } from '../http/schemas.js'
 import type { AccountRecord, AccountsRepository } from '../repo/accounts.js'
 import { owned_resourceRz } from './ownership.js'
@@ -32,13 +32,16 @@ export type AccountResponseBody = {
 }
 
 /**
- * The two values the specification enumerates with exactly one member each. They are
- * constants rather than columns because a column that can only hold one value states a
- * decision nobody has taken; `migrations/003-accounts.ts` records the same choice from the
- * schema's side, and the response schema's `enum` is what fails loudly if either drifts.
+ * The specification enumerates exactly one sort code and one currency. Both are constants
+ * rather than columns because a column that can only hold one value states a decision nobody
+ * has taken; `migrations/003-accounts.ts` records the same choice from the schema's side, and
+ * the response schema's `enum` is what fails loudly if either drifts.
+ *
+ * The currency moved to `src/domain/money.ts` when the transaction endpoints became a second
+ * thing that renders it. The sort code stays here, because an account is the only thing that
+ * has one.
  */
 const SORT_CODE = '10-10-10'
-const CURRENCY = 'GBP'
 
 /**
  * The one place a balance stops being pennies. `toDecimal` is the inverse of the codebase's

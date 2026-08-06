@@ -11,6 +11,15 @@ declare const brand: unique symbol
  */
 export type Pennies = number & { readonly [brand]: 'Pennies' }
 
+/**
+ * The only currency this service handles, and the only place that says so. It is a constant
+ * rather than a column for the reason `sort_code` is — the specification enumerates exactly
+ * one value, and a column that can hold one value states a decision nobody has taken. It
+ * lives here rather than beside either service because two of them render it, and two copies
+ * of a value are two things that can drift.
+ */
+export const CURRENCY = 'GBP'
+
 const AMOUNT_FIELD = 'amount'
 
 /**

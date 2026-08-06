@@ -41,7 +41,27 @@ export const testDatabaseUrl = (env: NodeJS.ProcessEnv = process.env): string =>
  * vitest process past the end of the run — which presents as a suite that passes and
  * then hangs, with nothing naming the cause. R12.
  */
+/**
+ * The pool bound, and it is stated rather than inherited. `pg` defaults to 10 per pool, and
+ * every test file that touches the database builds its own — so the default admits far more
+ * simultaneous backends than the suite has any use for, against a server whose own default
+ * `max_connections` is 100.
+ *
+ * Five was chosen by measurement rather than by taste. The concurrency test in
+ * `src/http/transactions.test.ts` fires a burst of twenty withdrawals at a cold pool, which
+ * under the default asks Postgres to fork ten backends in the same instant; on a loaded
+ * machine that fails with `could not fork new process`, and the request that could not get a
+ * connection answers 500 rather than the 422 the balance called for. It is not a defect in
+ * the withdrawal — the money was right in every run — but it is a suite that fails for a
+ * reason unrelated to what it asserts. R12 carries the residual and the real fix.
+ *
+ * It is deliberately not an environment variable. The four configurable values are named in
+ * the README, and this is a property of how the process talks to the database rather than
+ * something an operator of this exercise tunes.
+ */
+const POOL_MAX = 5
+
 export const connect = (connectionString: string): Kysely<Database> =>
   new Kysely<Database>({
-    dialect: new PostgresDialect({ pool: new Pool({ connectionString }) }),
+    dialect: new PostgresDialect({ pool: new Pool({ connectionString, max: POOL_MAX }) }),
   })

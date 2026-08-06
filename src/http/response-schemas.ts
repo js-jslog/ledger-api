@@ -96,3 +96,35 @@ export const accountResponseSchema = {
     updatedTimestamp: { type: 'string', format: 'date-time' },
   },
 } as const
+
+/**
+ * `userId` is published as optional and is required here, which is the one place this schema
+ * is deliberately stricter than the document. Anything satisfying it still satisfies the
+ * published one, and requiring the field is what turns "every transaction records who made
+ * it" into something checked on the way out rather than a property of the insert nobody
+ * reads back.
+ *
+ * `reference` is genuinely optional and is absent rather than `null` when the client did not
+ * send one — `null` fails `type: 'string'`, which is the check working rather than an
+ * inconvenience.
+ *
+ * `amount` carries the same trap `accountResponseSchema.balance` does, and it is repeated
+ * rather than cross-referenced because the two are read at different times: `type: 'number'`
+ * accepts `1099` as readily as `10.99`, so nothing here catches an amount that reached the
+ * wire without `toDecimal`. The only thing standing there is a test with a non-round amount
+ * in it.
+ */
+export const transactionResponseSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'amount', 'currency', 'type', 'userId', 'createdTimestamp'],
+  properties: {
+    id: { type: 'string', pattern: '^tan-[A-Za-z0-9]+$' },
+    amount: { type: 'number', minimum: 0, maximum: 10000 },
+    currency: { type: 'string', enum: ['GBP'] },
+    type: { type: 'string', enum: ['deposit', 'withdrawal'] },
+    reference: { type: 'string' },
+    userId: { type: 'string', pattern: '^usr-[A-Za-z0-9]+$' },
+    createdTimestamp: { type: 'string', format: 'date-time' },
+  },
+} as const

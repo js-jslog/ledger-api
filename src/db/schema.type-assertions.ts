@@ -2,11 +2,13 @@
  * A test enforced by `pnpm typecheck` rather than by the test runner, for the same
  * reason as the other three: everything below is decided before the program exists.
  *
- * WHAT IT STANDS AGAINST. Section 3 lists "`updatedTimestamp` is maintained by a
- * database trigger, never by application code" as mechanised, and `TriggerMaintained`
- * is the whole mechanism. There is no runtime symptom to catch it failing: an
- * application write to `updated_at` would simply be overwritten by the trigger, so the
- * suite would stay green while the type had stopped saying anything. Each
+ * WHAT IT STANDS AGAINST. Two declarations in `schema.ts` carry a guarantee that nothing
+ * at runtime can report on. `DatabaseMaintained` is the whole of "`updatedTimestamp` is
+ * maintained by a database trigger, never by application code", and the `never` update
+ * position on every `transactions` column is the whole of "transactions are append-only" at
+ * this layer. Neither has a runtime symptom: an application write to `updated_at` would
+ * simply be overwritten by the trigger, and an amended transaction would succeed quietly.
+ * The suite would stay green while the types had stopped saying anything. Each
  * `@ts-expect-error` fails the build if the error it names stops being produced.
  *
  * The insert case is here for a second reason. `never` in the insert position reads as
@@ -16,6 +18,7 @@
  */
 import type { Kysely } from 'kysely'
 
+import type { Pennies } from '../domain/money.js'
 import type { Database } from './schema.js'
 
 const row = {
@@ -54,4 +57,29 @@ export const insertSupplyingCreatedAt = async (db: Kysely<Database>): Promise<vo
 export const updateSettingUpdatedAt = async (db: Kysely<Database>): Promise<void> => {
   // @ts-expect-error -- updated_at is maintained by users_set_updated_at.
   await db.updateTable('users').set({ updated_at: new Date() }).execute()
+}
+
+// ── Amending a transaction ───────────────────────────────────────────────────────
+// Section 3 requires that transactions be append-only at every layer, and this is the
+// layer with no runtime symptom: there is no update path to test, so a `never` that
+// stopped saying anything would leave the suite green and the guarantee gone. `reference`
+// is the column chosen because it is the only nullable one and therefore the one an
+// amendment would plausibly reach for.
+
+const transaction = {
+  id: 'tan-0123456789abcdef',
+  account_number: '01234567',
+  user_id: 'usr-0123456789abcdef',
+  amount: 1099 as Pennies,
+  type: 'deposit',
+  reference: null,
+}
+
+export const insertTransaction = async (db: Kysely<Database>): Promise<void> => {
+  await db.insertInto('transactions').values(transaction).execute()
+}
+
+export const updateAmendingATransaction = async (db: Kysely<Database>): Promise<void> => {
+  // @ts-expect-error -- transactions are append-only; there is no update position to set.
+  await db.updateTable('transactions').set({ reference: 'amended' }).execute()
 }

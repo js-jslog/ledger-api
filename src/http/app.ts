@@ -4,14 +4,17 @@ import type { Kysely } from 'kysely'
 import type { Database } from '../db/schema.js'
 import { correlationMiddleware } from '../observability/correlation.js'
 import { accountsRepository } from '../repo/accounts.js'
+import { transactionsRepository } from '../repo/transactions.js'
 import { usersRepository } from '../repo/users.js'
 import { accountsService } from '../service/accounts.js'
 import { authService } from '../service/auth.js'
+import { transactionsService } from '../service/transactions.js'
 import { usersService } from '../service/users.js'
 import { createAccount, fetchAccount } from './accounts.js'
 import { login } from './auth.js'
 import { errorMiddleware, notFoundFallback } from './error-middleware.js'
 import { health } from './health.js'
+import { createTransaction, fetchTransaction } from './transactions.js'
 import { createUser, fetchUser } from './users.js'
 
 /**
@@ -31,7 +34,9 @@ export const createApp = (db: Kysely<Database>): Express => {
   const repo = usersRepository(db)
   const users = usersService(repo)
   const auth = authService(repo)
-  const accounts = accountsService(accountsRepository(db))
+  const accountsRepo = accountsRepository(db)
+  const accounts = accountsService(accountsRepo)
+  const transactions = transactionsService(accountsRepo, transactionsRepository(db))
 
   // Route-independent concerns, above every route rather than inside any handler. The
   // body limit is a decision rather than a default: without one, a request body is
@@ -46,6 +51,8 @@ export const createApp = (db: Kysely<Database>): Express => {
   app.get('/v1/users/:userId', fetchUser(users))
   app.post('/v1/accounts', createAccount(accounts))
   app.get('/v1/accounts/:accountNumber', fetchAccount(accounts))
+  app.post('/v1/accounts/:accountNumber/transactions', createTransaction(transactions))
+  app.get('/v1/accounts/:accountNumber/transactions/:transactionId', fetchTransaction(transactions))
 
   // After every route, in this order. `notFoundFallback` takes no path argument: under
   // path-to-regexp v8 both `app.use('*')` and `app.all('*')` throw at startup.

@@ -14,8 +14,22 @@
  */
 import type { Result } from 'neverthrow'
 
-import { userResponseSchema } from './response-schemas.js'
-import { createUserSchema } from './schemas.js'
+import {
+  accountResponseSchema,
+  tokenResponseSchema,
+  transactionResponseSchema,
+  userResponseSchema,
+} from './response-schemas.js'
+import {
+  accountParamsSchema,
+  createAccountSchema,
+  createTransactionSchema,
+  createUserSchema,
+  loginSchema,
+  tokenClaimsSchema,
+  transactionParamsSchema,
+  userParamsSchema,
+} from './schemas.js'
 import { responseValidatorFor, validatorFor } from './validator-for.js'
 
 /** True only for `unknown`. `any` is excluded, or it would satisfy every assertion. */
@@ -49,8 +63,48 @@ assertNotUnknown<
   IsUnknown<ValidatedBody<ReturnType<typeof validatorFor<typeof createUserSchema>>>>
 >()
 
+assertNotUnknown<IsUnknown<ValidatedBody<ReturnType<typeof validatorFor<typeof loginSchema>>>>>()
+
+assertNotUnknown<
+  IsUnknown<ValidatedBody<ReturnType<typeof validatorFor<typeof tokenClaimsSchema>>>>
+>()
+
+assertNotUnknown<
+  IsUnknown<ValidatedBody<ReturnType<typeof validatorFor<typeof userParamsSchema>>>>
+>()
+
+assertNotUnknown<
+  IsUnknown<ValidatedBody<ReturnType<typeof validatorFor<typeof accountParamsSchema>>>>
+>()
+
+assertNotUnknown<
+  IsUnknown<ValidatedBody<ReturnType<typeof validatorFor<typeof createAccountSchema>>>>
+>()
+
+assertNotUnknown<
+  IsUnknown<ValidatedBody<ReturnType<typeof validatorFor<typeof createTransactionSchema>>>>
+>()
+
+assertNotUnknown<
+  IsUnknown<ValidatedBody<ReturnType<typeof validatorFor<typeof transactionParamsSchema>>>>
+>()
+
 assertNotUnknown<
   IsUnknown<ValidatedBody<ReturnType<typeof responseValidatorFor<typeof userResponseSchema>>>>
+>()
+
+assertNotUnknown<
+  IsUnknown<ValidatedBody<ReturnType<typeof responseValidatorFor<typeof tokenResponseSchema>>>>
+>()
+
+assertNotUnknown<
+  IsUnknown<ValidatedBody<ReturnType<typeof responseValidatorFor<typeof accountResponseSchema>>>>
+>()
+
+assertNotUnknown<
+  IsUnknown<
+    ValidatedBody<ReturnType<typeof responseValidatorFor<typeof transactionResponseSchema>>>
+  >
 >()
 
 // ── The proof that the assertion can fail ────────────────────────────────────────

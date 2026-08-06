@@ -11,15 +11,30 @@ import type { Pennies } from '../domain/money.js'
 export type Database = {
   users: UsersTable
   accounts: AccountsTable
+  transactions: TransactionsTable
 }
 
 /**
- * `never` in both write positions. The column is maintained by a database trigger, so
- * the type's job is to make an application-side write a compile error rather than a
- * race against the trigger that owns it — and the same declaration still leaves the
- * column omittable on insert, which is what lets the default apply.
+ * `never` in both write positions. The column is maintained by the database — `created_at`
+ * by its default, `updated_at` by a trigger — so the type's job is to make an
+ * application-side write a compile error rather than a race against whatever owns the
+ * column. The same declaration still leaves the column omittable on insert, which is what
+ * lets the default apply.
+ *
+ * Named for the database rather than for the trigger because `transactions` has no trigger
+ * at all and still needs this: the alias says who writes the column, and the answer there
+ * is the default.
  */
-type TriggerMaintained = ColumnType<Date, never, never>
+type DatabaseMaintained = ColumnType<Date, never, never>
+
+/**
+ * `never` in the update position and nothing else. Section 3 requires that transactions be
+ * append-only at every layer, and this is that requirement at the type layer: every column
+ * of `transactions` carries it, so `db.updateTable('transactions').set(…)` cannot name a
+ * column to set and does not compile. The migration carries the other half by giving the
+ * table no `updated_at` to maintain.
+ */
+type AppendOnly<T> = ColumnType<T, T, never>
 
 export type UsersTable = {
   id: string
@@ -33,8 +48,8 @@ export type UsersTable = {
   phone_number: string
   email: string
   password_hash: string
-  created_at: TriggerMaintained
-  updated_at: TriggerMaintained
+  created_at: DatabaseMaintained
+  updated_at: DatabaseMaintained
 }
 
 export type AccountsTable = {
@@ -51,6 +66,16 @@ export type AccountsTable = {
    * produces.
    */
   balance: ColumnType<Pennies, never, Pennies>
-  created_at: TriggerMaintained
-  updated_at: TriggerMaintained
+  created_at: DatabaseMaintained
+  updated_at: DatabaseMaintained
+}
+
+export type TransactionsTable = {
+  id: AppendOnly<string>
+  account_number: AppendOnly<string>
+  user_id: AppendOnly<string>
+  amount: AppendOnly<Pennies>
+  type: AppendOnly<string>
+  reference: AppendOnly<string | null>
+  created_at: DatabaseMaintained
 }

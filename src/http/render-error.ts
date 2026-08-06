@@ -23,6 +23,7 @@ const STATUSES: Record<DomainError['kind'], number> = {
   AlreadyExists: 409,
   Unauthenticated: 401,
   Forbidden: 403,
+  InsufficientFunds: 422,
   Unexpected: 500,
 }
 

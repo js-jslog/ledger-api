@@ -136,3 +136,47 @@ export const createAccountSchema = {
     accountType: { type: 'string', enum: ['personal'] },
   },
 } as const
+
+/**
+ * The first ingress schema carrying money, and `currencyScale` is the keyword the whole
+ * arrangement in `validator-for.ts` was built for. It is not a duplicate of `toPennies`:
+ * this one puts a `details` entry naming `amount` into the 400 the specification publishes,
+ * and `toPennies` is the guarantee that no conversion happens anywhere without the same
+ * check. They share the predicate, so they cannot disagree about what 2dp means — R11.
+ *
+ * `minimum: 0` is the published constraint and it permits a £0 transaction. My preference
+ * is the opposite; it is implemented as published because the alternative is a 400 the
+ * document does not sanction, and the residual is R8 rather than a silent deviation.
+ *
+ * `maximum` is the one bound in this document that is satisfiable per request and
+ * unsatisfiable in aggregate — two legal deposits exceed the balance ceiling it publishes.
+ * The response half of that contradiction was removed at slice 0c; this half is kept,
+ * because a cap on one amount is a rule a client can actually obey. R9.
+ */
+export const createTransactionSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['amount', 'currency', 'type'],
+  properties: {
+    amount: { type: 'number', minimum: 0, maximum: 10000, currencyScale: 2 },
+    currency: { type: 'string', enum: ['GBP'] },
+    type: { type: 'string', enum: ['deposit', 'withdrawal'] },
+    reference: { type: 'string' },
+  },
+} as const
+
+/**
+ * Two parameters, and both are validated for the reason one is: `^tan-[A-Za-z0-9]$` as
+ * supplied matches exactly one character after the prefix, so it rejects the document's own
+ * example. Widened to `^tan-[A-Za-z0-9]+$` here and on the response, and recorded in
+ * `docs/spec-changes.md` § 4.
+ */
+export const transactionParamsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['accountNumber', 'transactionId'],
+  properties: {
+    accountNumber: { type: 'string', pattern: '^01\\d{6}$' },
+    transactionId: { type: 'string', pattern: '^tan-[A-Za-z0-9]+$' },
+  },
+} as const
