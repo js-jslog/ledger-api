@@ -1,0 +1,50 @@
+#!/bin/sh
+#
+# Refuse a commit message that identifies the origin of this work.
+#
+# This repository is public and its history is permanent, so a phrase like this
+# cannot be withdrawn once pushed — it is the only rule here whose violation
+# needs a history rewrite rather than a follow-up commit. It is otherwise
+# enforced by remembering it at the moment of writing, which is exactly when the
+# source material is in front of you.
+#
+# Enable in a fresh clone with:  git config core.hooksPath .githooks
+
+set -e
+
+msg_file="$1"
+
+# Strip git's own comment lines before matching, and this is load-bearing rather
+# than tidy. With `commit.verbose` set, git appends the whole staged diff to the
+# message template as `#` lines — and openapi.yaml is a supplied input document
+# committed unaltered, so it legitimately contains the phrases below. Matching the
+# raw file would fail every commit that touches the specification, which is the
+# fastest possible way to learn to pass --no-verify.
+body=$(grep -v '^#' "$msg_file" || true)
+
+# Messages git generated rather than ones written here.
+case "$body" in
+  "Merge branch"* | "Merge remote-tracking"* | "Merge tag"* | "Revert "*) exit 0 ;;
+esac
+
+# Note the first term. The two-word company name is deliberately NOT written out
+# anywhere in this repository, including here — spelling it would commit the exact
+# searchable string this hook exists to keep out. The single word is sufficient:
+# it has no legitimate reason to appear in a commit message on a ledger API.
+forbidden='eagle|take[ -]?home|tech test|coding test|interview|pair[ -]?coding|12[ -]hour'
+
+match=$(printf '%s\n' "$body" | grep -inE "$forbidden" || true)
+
+if [ -n "$match" ]; then
+  {
+    echo 'commit-msg: REJECTED — this message identifies the origin of the work.'
+    echo
+    printf '%s\n' "$match" | sed 's/^/  line /'
+    echo
+    echo 'The repository is public and the history is permanent. Rephrase neutrally:'
+    echo '  "the build", "the review session", "at this scale".'
+    echo
+    echo 'Your message has been kept. Edit and commit again.'
+  } >&2
+  exit 1
+fi

@@ -1,0 +1,36 @@
+#!/bin/sh
+#
+# Refuse a commit that does not typecheck, lint and test.
+#
+# Typecheck and test are one gate, not two. A suite can be entirely green while
+# `tsc` objects, so running tests alone lets work continue on top of code that does
+# not compile — and the longer that goes unnoticed, the more of it there is to
+# unpick.
+#
+# Enable in a fresh clone with:  git config core.hooksPath .githooks
+#
+# KNOWN LIMIT, stated rather than discovered: this runs against the WORKING TREE,
+# not against the staged content. Staging a subset of your changes and committing
+# can therefore record a green commit whose own tree does not build. Checking the
+# staged content properly means stashing the remainder, which introduces a way to
+# lose work in exchange for a case this workflow does not produce — slices are
+# committed whole. If partial commits ever become normal here, revisit it.
+#
+# Bypass with --no-verify. If you find yourself doing that twice, the gate is
+# wrong and should be changed rather than routed around.
+
+set -e
+
+# A merge is resolving someone else's work, not asserting that this tree is good.
+if [ -e "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+printf 'pre-commit: typecheck\n'
+pnpm --silent typecheck
+
+printf 'pre-commit: lint\n'
+pnpm --silent lint
+
+printf 'pre-commit: test\n'
+pnpm --silent test

@@ -1,0 +1,11 @@
+-- Runs once, on an empty data directory only. The image ignores this directory
+-- entirely when the volume already holds a cluster, so a change here needs
+-- `docker compose down -v` to take effect.
+--
+-- Two databases rather than one, because the reset helper's guard has to have
+-- something to refuse. The helper drops and recreates `public`, and it asserts the
+-- target name ends in `_test` before doing so; with a single database that assertion
+-- could only ever be tested against a name nobody uses. With `ledger` here, the
+-- guard stands between the helper and a live database, and the test that proves it
+-- fires points the helper at exactly that. See test/db/test-database-name.ts.
+CREATE DATABASE ledger_test;

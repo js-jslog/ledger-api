@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "verbatimModuleSyntax": true,
+    "types": ["node"],
+
+    "strict": true,
+
+    // Not part of `strict`, and adopted deliberately: indexing an array or a record
+    // yields `T | undefined` rather than `T`, so a missing element has to be handled
+    // instead of assumed.
+    "noUncheckedIndexedAccess": true,
+
+    // `exactOptionalPropertyTypes` is deliberately NOT enabled, and is also not part
+    // of `strict`. It distinguishes an absent property from one explicitly set to
+    // `undefined`, which sounds strictly better and is not: a generated type reading
+    // `line2?: string | undefined` will not satisfy a hand-written one reading
+    // `line2?: string`, so every boundary between generated and hand-written types
+    // needs an adapter. Reassess if that friction never materialises.
+
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src", "test", "migrations", "vitest.config.ts"]
+}
