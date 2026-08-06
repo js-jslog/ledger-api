@@ -45,6 +45,22 @@ Three documents carry the reasoning behind the decisions this one describes:
 `docs/conventions.md` states the standing rules the code is held to — naming, comments,
 evidence, test hygiene and what a commit carries.
 
+## Running the devcontainer
+
+The development and demostration has been tested from the context of a devcontainer. To follow that
+workflow there are only two prerequisites:
+
+- Docker
+- Devcontainer CLI
+
+This process has only been run from Windows with Docker Desktop, but it is expected to work on a
+linux or macOS (although you will have to make a counterpart to the runcontainer.ps1 file):
+
+```
+git clone https://github.com/js-jslog/ledger-api.git
+./runcontainer.ps1 start
+```
+
 ## Running the service
 
 ```
@@ -57,8 +73,8 @@ Then `curl localhost:3000/health`, which answers `{"status":"ok"}`. `PORT` overr
 port.
 
 Nothing but Node and pnpm is required for this path — the devcontainer in
-`.devcontainer/` is one way to get a working toolchain, never a requirement. The
-`Dockerfile` at the repository root builds *that* development image — an editor and shell
+`.devcontainer/` is one way to get a working toolchain, never an intended requirement. The
+`Dockerfile` at the repository root builds _that_ development image — an editor and shell
 environment — rather than the service; there is no container image of this API, and the
 three commands above are how it runs. The database below is separate: the service starts
 and answers `/health` without it, and every endpoint that touches data needs it.
