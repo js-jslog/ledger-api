@@ -1302,3 +1302,107 @@ endpoints, and for a missing transaction on a foreign account; 404 on an account
 does not exist, on a transaction id that does not exist, and on a transaction belonging to
 another of the caller's own accounts; 422 on a withdrawal the balance cannot cover, asserted
 alongside the balance and the absence of a ledger row.
+
+---
+
+## Pass D — step 8: the cold-start rehearsal, the README, and the final read
+
+The one pass that produces no code, so there is nothing here that a test could have
+caught. What stands in for the suite is the rehearsal, which runs the reviewer's commands
+rather than this project's, and the practice of following a pointer instead of trusting
+it.
+
+### The claim under test, and it failed on the first command
+
+> The reviewer's path works: clone, `pnpm install --frozen-lockfile`, `pnpm build`,
+> `pnpm start`, `docker compose up -d --wait`, `pnpm test`.
+
+**False, and it had been for four slices.** A genuine cold install — `node_modules`
+removed rather than merely present — reported `ERR_PNPM_IGNORED_BUILDS` for esbuild and
+rewrote the committed `allowBuilds: {}` into an unresolved placeholder, after which every
+`pnpm` script died inside `runDepsStatusCheck` with nothing naming the cause.
+
+The cause was `tsx`, installed at slice 0e while choosing how to run TypeScript and then
+declined. Declining removed it from `package.json` and not from `pnpm-lock.yaml`, where it
+survived as a resolved optional peer of vite and kept `esbuild` — the only package in the
+tree with a `postinstall` — in every vitest resolution key.
+
+| What was checked | What it said |
+|---|---|
+| `pnpm install --frozen-lockfile` with `node_modules` present | "Already up to date", no warning |
+| the same with `node_modules` removed | `ERR_PNPM_IGNORED_BUILDS`, and the workspace file rewritten |
+| `pnpm typecheck` after that install | dies in `runDepsStatusCheck`, exit non-zero |
+| vite 8's own manifest | `rolldown` is the dependency; `esbuild` and `tsx` are *optional peers* |
+| a lockfile regenerated from the unchanged `package.json` | esbuild, tsx and tslib gone; no ignored builds |
+
+**Two things worth carrying, and the second is the general one.** A populated
+`node_modules` hides this completely, because pnpm reports ignored builds only on an
+install that does work — so every green suite during the build was consistent with the
+reviewer's first command failing. And R18 named two triggers, neither of which fired: the
+one that did is *removing* a dependency, since the lockfile keeps the peer resolution the
+removed package caused. R18 carries that as an amendment.
+
+**Fixed by regenerating the lockfile** rather than allowlisting esbuild, which would have
+recorded a build script this project does not want and falsified the accurate half of
+R18. The cost is three dev-only transitive moves — `nanoid`, `rolldown`, and
+typescript-eslint 8.65.0 to 8.66.0, whose `typescript >=4.8.4 <6.1.0` range is unchanged,
+so R14 and R20 are untouched. The TypeScript pin did not move.
+
+### The departure from section 12, taken deliberately
+
+Section 12 asks for `docs/adr/`, one short file per significant decision. A6 replaces that
+with a one-page index and records the replacement as a departure. It is built as one: the
+README's § Design decisions says in its own first paragraph that it is an index rather
+than a set of records, and why.
+
+The argument is the one this project makes everywhere else. Every decision the ADRs would
+describe was taken at the point it was forced and written down then, so an ADR now is a
+second copy of reasoning that already exists, free to drift from the original and with no
+mechanism to notice when it does. What an index adds that prose would not is that its
+pointers are checkable.
+
+**So they were checked, and four of them were wrong.** Written from memory of where things
+live, the index attributed money and the trigger-maintained timestamps to the database
+slice — which by A4's design carries no tables, and therefore neither decision — and
+`toPennies` to the validation slice rather than the error-envelope slice that built it.
+Every pointer in the finished table was then followed to the section or entry it names.
+That is the step-8 analogue of breaking a mechanism and counting: a pointer is a claim,
+and following it is the only way to falsify it.
+
+### The final read, and what it found
+
+Reading 41 catalogue entries and `docs/spec-changes.md` for staleness rather than for
+gaps. `docs/spec-changes.md` came through unchanged — it describes edits to a document
+that has not moved since slice 0c, which is why it was the half less likely to rot. Five
+catalogue entries had been overtaken and are amended in place, listed in that commit's
+message rather than repeated here.
+
+The pattern in four of the five is the same and is worth naming: **an entry written before
+a decision it depends on, which the decision then invalidated without touching the entry.**
+R2 counted endpoints that A5 later deferred; R31 set a threshold of three writing files and
+the suite reached five; R35 declined a mechanism on the grounds that one route existed and
+there are eight. R4 is the odd one — it claimed a pointer from the README that was never
+written, which is the same defect the index above was checked for and the reason it was
+checked.
+
+### The two open items, decided rather than inherited
+
+**The serialisation-log truncation keeps no run marker.** The concern was that
+`overlaps()` reads whatever the log holds, so an aborted run leaving an unclosed section
+could be judged as this run's overlap. Measured both ways: as shipped, an unclosed record
+written before the run is truncated and both tests pass; with the truncation entry removed
+from `globalSetup`, both fail. So the exposure exists only when the truncation is absent,
+and then it is loud rather than silent. A run marker would make `overlaps()` robust to the
+removal of its own reset, which is not a property worth ten lines in a harness whose whole
+job is to prove one thing about file scheduling.
+
+**The `argsIgnorePattern` comment stays**, and the question is closed in
+`docs/conventions.md` where it was left open, on the narrower basis that survived the
+measurement rather than the one it was written with.
+
+### One thing to carry forward
+
+The rehearsal is not a formality and it is not last. It found the only defect in this pass
+and it was the first thing run, which left time to fix it; run at the end it would have
+produced a finding and no room to act on it. Everything else step 8 does is writing, and
+writing cannot fail in a way that surprises you.
