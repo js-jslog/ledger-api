@@ -98,8 +98,8 @@ a row lock:
 ```sql
 BEGIN;
 SELECT user_id FROM accounts WHERE account_number = $1 FOR UPDATE;
-UPDATE accounts SET balance_pennies = balance_pennies - $2
- WHERE account_number = $1 AND balance_pennies >= $2 RETURNING balance_pennies;
+UPDATE accounts SET balance = balance - $2
+ WHERE account_number = $1 AND balance >= $2 RETURNING balance;
 INSERT INTO transactions ...;
 COMMIT;
 ```
@@ -110,6 +110,20 @@ extra round trip inside the transaction, and concurrent access to a single accou
 serialises. Roughly thirty minutes including tests. Not taken because the
 lock-free version is correct for the money and the status gap is unreachable
 without R2.
+
+> **Written before the code and confirmed by it, with one thing this entry could not
+> have known.** The design above is what was built, in `debitIfSufficient`. The column
+> is `balance` rather than `balance_pennies`, and the SQL above has been corrected to
+> match `migrations/003-accounts.ts`.
+>
+> **The check that distinguishes 404 from 422 has no witness reachable through the API,
+> and that was measured rather than reasoned about.** With it removed, the entire suite
+> stayed green — the case cannot be constructed from outside, because the endpoint that
+> would delete the account is the one R2 defers. This entry's "unreachable without R2"
+> is therefore true of the *test suite* as well as of the risk, which is a sharper
+> statement than it was written as: the mitigation and the exposure are unreachable by
+> the same route. `src/repo/accounts.test.ts` exercises the branch one layer below the
+> endpoint for that reason. See `docs/divergences.md` § Slice 6/7.
 
 ---
 
@@ -330,6 +344,29 @@ breaching it, most likely 422.
 > the status for breaching it can be decided together — which is the same conclusion the
 > paragraph above reaches for the published maximum.
 
+> **The deposit endpoint has now arrived, and no ceiling was built. Deliberate, and this is
+> the record of the decision rather than a third deferral.**
+>
+> The amendment above forecast that this endpoint was where a ceiling and its status could
+> be decided together. It is, and the decision is not to have one. **R8 already litigated
+> the same question and its answer governs here:** a £0 transaction is permitted because
+> refusing it requires a status the document does not sanction, and the residual was
+> recorded rather than the deviation taken. A balance ceiling is the same shape — the
+> specification defines no status for a deposit that would breach one, and the 422 it does
+> publish on this operation is described as insufficient funds. Inventing a second meaning
+> for it would be a silent deviation dressed as conformance.
+>
+> So both ceilings stand as risks. The published £10,000 is exceeded by two legal deposits
+> and produces a body a generated client may reject. The column's £21.4m is exceeded by
+> about 2,148 maximum deposits and produces a Postgres overflow surfacing as a 500 with no
+> useful message. The second is the worse failure and the less reachable one.
+>
+> **What a real system would do is unchanged and is worth stating plainly, because it is
+> the answer to the obvious question:** define the ceiling in the specification, define the
+> status for breaching it — 422 with a distinct message is the natural choice — and enforce
+> it in the same conditional update the withdrawal already uses, `WHERE balance + $1 <=
+> $ceiling`, so the check is atomic for the same reason the debit is.
+
 ---
 
 ## R10 — Password hashing is serialised on the event loop
@@ -421,6 +458,29 @@ the reverse. That is an unmeasurable cost traded against a trivial and measurabl
 one. If the suite grows enough to matter, take it — and make everything at module
 scope deliberate at the same time.
 
+> **Amended at the transaction slice. "Immaterial at the current size" was wrong, and the
+> arithmetic that shows it was available before anything failed.**
+>
+> Eleven files build a pool. `pg` defaults to ten connections per pool. The server's own
+> `max_connections` is 100. So the default admitted more simultaneous backends than the
+> server would grant, and the entry above frames the ceiling as something a *future* file
+> count would reach.
+>
+> **What surfaced it was the concurrency test rather than the file count.** Its burst of
+> twenty withdrawals arrives at a cold pool and asks Postgres to fork ten backends in the
+> same instant; on a loaded machine that fails with `could not fork new process`, and the
+> request that could not get a connection answers 500 where the balance called for 422.
+> Not a defect in the withdrawal — the money was right in every run — but a suite that
+> fails for a reason unrelated to what it asserts.
+>
+> **Mitigated, not closed.** `POOL_MAX` in `src/db/connection.ts` bounds each pool at five,
+> which brings the worst case within the server's limit and reduces the simultaneous forks
+> the burst requires. Seven consecutive full-suite runs since, with no fork errors logged
+> by the server. That is evidence and not proof: the failure is a resource limit on the
+> machine running the tests, so a busier machine can still reach it. The close is the same
+> as above — one shared pool for the run — and the reason it is still not taken is
+> unchanged.
+
 ---
 
 ## R13 — Handlers cannot stream, set custom headers, or return non-JSON
@@ -493,6 +553,27 @@ transaction level rather than relying on the server default, and adding retry
 handling for `40001` so the behaviour degrades correctly if the level changes.
 Perhaps thirty minutes, and it is the right thing to do before this code runs
 anywhere with a non-default configuration.
+
+> **Amended once both tests existed, because only one of them does the work this entry
+> credits to both.**
+>
+> Replacing the conditional update with a read-then-write and running the file five
+> times: the two-£100 case passed every time, and only the twenty-way case failed. Two
+> requests through Express do not overlap enough to interleave; twenty do. The
+> verification this design was written from was against raw concurrent connections,
+> where the interleaving can be arranged directly — through the API it cannot be.
+>
+> So **the twenty-way case is the only test standing between this code and a naive
+> implementation**, which is worth knowing because it is the one that looks like the
+> redundant extra. The two-way case is kept and still earns its place: it pins the status
+> pair and the single ledger row, neither of which the other asserts. What it does not do
+> is detect a lost update.
+>
+> **A second limit, on what the tests are sensitive to.** The burst is also a load test of
+> connection establishment, which it was never meant to be — see R12. A request that
+> cannot get a connection answers 500, and the assertion cannot tell that from a
+> withdrawal that was wrongly refused. The money was correct in every run, including
+> every failing one.
 
 ---
 
@@ -1462,6 +1543,24 @@ distinction as its two priorities.
 > falsification would confirm it just as neatly. That is the gap this entry describes and
 > it is unchanged; the transcription is what was checked twice, against
 > `coding-test.txt` directly rather than against memory of it.
+
+> **The third decision has now been taken, and it is the one that most nearly went
+> unnoticed.**
+>
+> The withdrawal's 404-versus-422 is built as designed. What the falsification pass found is
+> that **the branch making the distinction had no witness at all**: with it removed, all 170
+> tests passed. This entry predicted that the written scenarios would stand in for a reader,
+> and on this decision they could not — the requirements have no scenario for an account
+> that disappears mid-request, because no client can cause one.
+>
+> **So the mechanism that caught it was neither review nor the scenarios. It was the habit
+> of breaking each claim and counting.** That is the practice this entry names as the
+> compensating control, and it is the first time it has caught something the other two could
+> not. `src/repo/accounts.test.ts` now exercises the branch below the endpoint.
+>
+> **The gap this entry describes is narrowed and not closed.** A test written at the same
+> time as the code it covers, by the same author, still cannot tell you the status is the
+> one the specification meant. What closes that is still a reader.
 
 ---
 

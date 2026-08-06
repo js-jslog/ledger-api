@@ -1148,3 +1148,157 @@ opinion about a malformed path parameter.
   the status for breaching it can be decided together.
 - **The retry loop has no test that makes it iterate**, because the minter has no seam.
   **R41**, and the constraint name it depends on is pinned even though the loop is not.
+
+---
+
+## Slice 6/7 — `POST .../transactions`, `GET .../transactions/{transactionId}`, the concurrency test
+
+**The reference was not consulted for this slice**, and here that is a departure rather than
+the plan. A6 suspends the diff at passes A and B and restores it at this one, on the grounds
+that `debitIfSufficient` and the single-transaction balance-plus-insert are content nothing
+else in this project covers. It was dropped for time at the pass's close, by the author's
+decision, with the slice otherwise complete. Recorded so a gap is never mistaken for a clean
+comparison — this is the one slice where the comparison would have been worth most.
+
+**Full depth by A6**, and it is where the two remaining pieces of real design content land:
+the withdrawal's status taxonomy, which is the last of R37's three named decisions, and the
+transaction boundary.
+
+### The decision this slice existed to get right, and the thing that nearly hid it
+
+The corrected 422 is built as section 7 specifies: a conditional
+`UPDATE … WHERE balance >= $1` inside an explicit transaction, the ownership resolve as a
+separate prior query, and on zero rows a follow-up existence check that separates 404 from
+422. `debitIfSufficient(accountNumber, amountPennies)` takes no balance, so reusing an
+earlier read is inexpressible rather than merely discouraged.
+
+**The existence check had no witness, and that was measured rather than suspected.** With it
+deleted and the failure path returning `insufficientFunds` unconditionally, the whole suite
+stayed green — 170 tests, nothing noticed. The branch is unreachable through the API by
+construction: the only endpoint that could remove an account between the resolve and the
+debit is `DELETE /v1/accounts/{accountNumber}`, which R2 defers. So the case cannot be built
+from outside, and a branch with no witness is indistinguishable from one that is switched
+off.
+
+`src/repo/accounts.test.ts` is the answer and it is the first test in this project that is
+not driven through the API. Deliberate, and narrow: it exists because the decision it covers
+cannot be reached at the layer everything else is tested at, not because repository tests are
+now a pattern. With it in place, deleting the check fails exactly one test.
+
+### What the walkthrough did, on its second and final test
+
+**It failed a third time.** Four files were touched that it did not name, and three of them
+share a root worth more than the list.
+
+| Touched, not named | What it was |
+|---|---|
+| `src/db/schema.type-assertions.ts` | The append-only guarantee is `never` in the update position. Nothing at runtime reports it being lost. |
+| `src/http/validator-for.type-assertions.ts` | Two new schemas. That file's own text already said every schema belongs in it. |
+| `src/repo/accounts.test.ts` | The decision above, at the layer where it can be constructed. |
+| `src/repo/accounts.ts` | A second repository — the resource is transactions, but the endpoint changes an account row. |
+
+The first three are one class: **every step in the walkthrough was about making the endpoint
+work, and none of them asked what the endpoint claims that nothing executes.** That is the
+same shape as slice 4/5's domain-gap finding — a list of files would have caught these and
+missed the next — so the new step states the discriminator, *if this property broke, what
+would fail?*, and names the two files as examples of it. The fourth is smaller and became a
+clause on step 3 rather than a step.
+
+**A fifth file was touched and is not a defect in it.** `src/db/connection.ts`, for the pool
+bound below. That is infrastructure the concurrency test exposed rather than a step in adding
+an endpoint, and naming it in the walkthrough would be advice nobody could act on.
+
+**One thing it got right that was not obvious.** `test/db/truncate.ts` needed no change for
+the second time: `truncate table users cascade` reaches `transactions` through two foreign
+keys. And the route sweep in `src/http/app.test.ts` picked up both new routes with no edit,
+which is visible in the test count — 147 to 149 before either endpoint had a test of its own.
+
+### The concurrency test, and the one claim in section 7 that this slice contradicts
+
+Both of R15's cases are built. Two £100 withdrawals against £100 yield one 201, one 422, a
+zero balance and exactly one transaction row; twenty concurrent £10 withdrawals against £100
+yield exactly ten successes.
+
+**The two-way case does not witness the lost update, and section 7 says it does.** Replacing
+the conditional update with a read-then-write and running the file five times: the two-way
+test passed every time, and only the twenty-way test failed. Through Express two requests do
+not overlap enough to interleave. Section 7's verification was against raw concurrent
+connections, where the interleaving can be arranged; through the API it cannot, and the
+twenty-way case is the only thing standing between this code and a naive implementation. The
+two-way case still earns its place — it pins the status pair and the row count, which the
+other does not assert — but it is not the one carrying the weight, which is the opposite of
+what its prominence suggests. R15 amended.
+
+**It was flaky, and the reason was not the one that was anticipated.** Not scheduling luck:
+the money was right in every run, including every failing one. The burst arrives at a cold
+pool and asks Postgres to fork ten backends in the same instant, which under load answers
+`could not fork new process`; the request that could not get a connection returns 500 where
+the balance called for 422. The pool is now bounded explicitly at five, which the suite
+wanted independently — eleven files build a pool, the driver's default is ten, and the
+server's own limit is 100, so the default admits more backends than the server allows.
+Mitigated rather than closed, and R12 carries it.
+
+### Deliberate departures in 6/7
+
+- **`transactions` declares `never` in the update position for every column**, so
+  `db.updateTable('transactions').set(…)` does not compile. The migration carries the other
+  half by giving the table no `updated_at` and no trigger. Section 3 asks for append-only at
+  every layer; this is that requirement at the layer with no runtime symptom.
+- **`user_id` is a column on `transactions` rather than derived from the account.** Only an
+  owner can transact today, so it is redundant — but it records who acted rather than who
+  owns, and this is the one table in the schema where a fact cannot be backfilled. The
+  response schema requires the field though the specification publishes it as optional, which
+  is stricter than the document and therefore still conforming.
+- **`TriggerMaintained` is renamed `DatabaseMaintained`.** `created_at` is a column default
+  everywhere and only `updated_at` has a trigger, so the name was already loose; on
+  `transactions`, which has no trigger at all, it would have been false in the one place the
+  distinction matters. A rename in a slice already reviewed, flagged as one.
+- **`CURRENCY` moved from `src/service/accounts.ts` to `src/domain/money.ts`**, because two
+  services render it now and two copies of a value are two things that can drift. The sort
+  code stayed where it was: an account is the only thing that has one.
+- **The transaction lookup filters on both halves of the path**, which looks like the mistake
+  the account lookup warns against and is its opposite. There, filtering by owner would
+  collapse 403 into 404 and the two cases have different statuses. Here the requirements give
+  a transaction that does not exist and one belonging to another account the same status, so
+  merging them is what the document asks for — and the service never holds another account's
+  transaction in order to decide not to mention it.
+- **The account is resolved before the transaction is looked up**, and the order shows in
+  exactly one case: a foreign account and a transaction id that exists nowhere. Asking for
+  the transaction first answers 404, which is true and is the wrong answer. That test was
+  added because the reordering broke nothing without it.
+- **The five schemas from passes A and B were added to
+  `src/http/validator-for.type-assertions.ts`.** That file claims every schema the service
+  validates against belongs in it, and since slice 3 it had covered two of nine. Additive, and
+  it makes an existing claim true rather than making a new one.
+- **`ten million` corrected to `one million`** in `src/domain/ids.ts` and
+  `src/repo/accounts.ts`. Six digits after a fixed prefix is 10^6, which is what R7 already
+  says. The retry loop's argument is unaffected.
+
+### Verified in both directions
+
+| Broken | What noticed |
+|---|---|
+| Conditional update → read-then-write | **one** — the twenty-way case only. The two-way case passes five times out of five |
+| The existence check | **one** — and nothing at all before `src/repo/accounts.test.ts` existed |
+| The ownership check, in the transactions service | three — both 403 scenarios and the ordering case |
+| The transaction lookup, filtered by id alone | one — the wrong-account 404 |
+| The account resolved after the transaction lookup | one — and nothing before the test for it was added |
+| `insufficientFunds` mapped to 404 | two |
+| `toDecimal` dropped from the transaction response | three |
+| A row inserted for a withdrawal that was refused | four |
+| `never` in the update position, at `pnpm typecheck` | one — the `@ts-expect-error` becomes unused |
+| A new error kind, at `pnpm typecheck` | two — `LEVELS` and `STATUSES`, each naming the missing member |
+| `userId` dropped from the response body | ten, which is the egress schema failing loudly rather than an assertion pinning a decision |
+
+The first two rows are the useful ones. Both are cases where the obvious test — the one the
+design named — turns out not to be the one that would catch the mistake.
+
+### Sad paths
+
+400 on a missing `type`, on an amount with three decimal places naming `currencyScale`, on a
+transaction type the specification does not publish, on a caller-supplied `id`, and on a
+malformed transaction id naming the parameter; 403 on another user's account, for both
+endpoints, and for a missing transaction on a foreign account; 404 on an account number that
+does not exist, on a transaction id that does not exist, and on a transaction belonging to
+another of the caller's own accounts; 422 on a withdrawal the balance cannot cover, asserted
+alongside the balance and the absence of a ledger row.

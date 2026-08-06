@@ -204,6 +204,17 @@ Created by forced change 1. Once a password exists, email becomes the login iden
 so it must be unique — and duplicate signup becomes a reachable path with no status
 defined for it. Added `409`, with `ErrorResponse`.
 
+### `userId` required on `TransactionResponse`, in this service's egress schema only
+
+`TransactionResponse` publishes `userId` and does not require it. The internal egress schema
+requires it, which is a narrowing rather than a change: a body satisfying the stricter schema
+satisfies the published one, so no client sees a difference and `openapi.yaml` is not edited.
+
+The point is what it makes checkable. Every transaction records who made it, and stating that
+in the response schema means a service that stopped recording it answers 500 rather than
+quietly publishing a body missing a field the reader assumed was there. The column is
+deliberate for the same reason — see `docs/divergences.md` § Slice 6/7.
+
 ### `additionalProperties: false` on the success response schemas
 
 **The word `additionalProperties` appears nowhere in the supplied document** — verified
