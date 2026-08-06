@@ -1,9 +1,27 @@
 # Ledger API
 
-A REST API for a retail bank: users, accounts and transactions.
+A REST API for a retail bank: users, accounts and transactions. Express 5 and Postgres,
+in TypeScript, against the specification in `openapi.yaml`.
 
-This README is written properly once the service exists. What follows is the part that
-is needed now, because getting the database wrong is expensive to diagnose later.
+Seven endpoints are delivered — create and fetch for each of users, accounts and
+transactions, plus login. Two that the specification publishes are deliberately not
+built: `GET /v1/accounts` and `GET /v1/accounts/{accountNumber}/transactions`. That gap
+is explained rather than omitted — § Adding an endpoint below walks through building the
+first of them as its worked example.
+
+Three documents carry the reasoning behind the decisions this one describes:
+
+- **`docs/residual-risk-catalogue.md`** — every limitation that was chosen rather than
+  encountered, each with what it costs, the sequence that triggers it, and what closes
+  it. The doctrine of this build made visible, and the first thing to read.
+- **`docs/spec-changes.md`** — every edit made to the supplied specification, by
+  category, including the findings that were read and deliberately not acted on.
+- **`docs/divergences.md`** — where the build departed from its own design, slice by
+  slice, and what measurement said when it did. A working document rather than a
+  polished one, and it is where the negative results live.
+
+`docs/conventions.md` states the standing rules the code is held to — naming, comments,
+evidence, test hygiene and what a commit carries.
 
 ## Running the service
 
@@ -18,7 +36,8 @@ port.
 
 Nothing but Node and pnpm is required for this path — the devcontainer in
 `.devcontainer/` is one way to get a working toolchain, never a requirement. The database
-below is separate, and the service does not need it yet.
+below is separate: the service starts and answers `/health` without it, and every endpoint
+that touches data needs it.
 
 `pnpm build` compiles to `dist/` rather than the service being run straight from source.
 Node executes TypeScript directly, but it does not rewrite import specifiers: this
@@ -47,6 +66,23 @@ pnpm test
 The suite drops and recreates the `public` schema in `ledger_test` before migrating, so
 a run does not depend on what the previous one left behind. It refuses to do that to any
 database whose name does not end in `_test`.
+
+## Configuration
+
+Four values are configurable, each read from the environment where it is used and each
+with a committed default that works: `DATABASE_URL` and `TEST_DATABASE_URL` (the two
+compose connection strings), `PORT` (3000) and `BCRYPT_COST` (12, which the test runner
+sets to 4 because hashing at 12 would otherwise dominate the suite). There is no `.env`
+and no `.env.example`, so a fresh clone needs nothing configured — `src/db/connection.ts`
+explains why the working value is committed in code rather than in an example file that
+could drift from it.
+
+Two values look configurable and deliberately are not. **The JWT signing key** is
+generated once per process, with no variable, no default and no committed fallback —
+§ Authentication below, and R32. **`POOL_MAX`** in `src/db/connection.ts` bounds each
+connection pool at five; that is a property of how this process talks to the database
+rather than a dial an operator turns, and R12 carries both the measurement behind the
+number and the reason the default of ten is wrong here.
 
 ## Authentication
 
@@ -192,6 +228,97 @@ step 4's rule does not apply.
 
 That leaves a response schema, a repository method, a service method, a handler, a route
 and its tests.
+
+## Dependencies
+
+Nine runtime dependencies. Versions live in `package.json` rather than being repeated
+here, where they would be a second copy free to go stale.
+
+| Dependency | What it does | Why this one |
+| --- | --- | --- |
+| `express` | HTTP framework | Boring, and legible to a reviewer who does not write Node. Express 5 propagates errors out of `async` middleware natively, which is what the JWT 401 path relies on; under Express 4 that rejection goes unhandled. |
+| `pg` | Postgres driver | What Kysely's Postgres dialect is built on. It also parses `INTEGER` as a native JavaScript number with no configuration, which is what lets the money representation be honest — `bigint` and `numeric` both come back as strings, and a Kysely declaration saying otherwise is a lie `strict: true` cannot catch. |
+| `kysely` | Typed query builder | Not an ORM: the SQL stays visible and `SELECT … FOR UPDATE` is available rather than abstracted behind a session. Migrations come with it, so there is no second tool. Its table declarations in `src/db/schema.ts` are also where `transactions` is made append-only, by declaring `never` in the update position of every column. |
+| `ajv` | JSON Schema validation | Runs at every ingress and against every response body. Configured `strict: true`, which *throws* on a regular expression left in a `format` keyword — that is what made six defects in the supplied specification findable rather than silent. See `docs/spec-changes.md`. |
+| `ajv-formats` | The standard `format` keywords | Ajv 8 stopped shipping these deliberately; `email` and `date-time` are both used here. By Ajv's own authors, and needed the moment a schema names a standard format. |
+| `json-schema-to-ts` | Compile-time type from the same schema | The schema that validates at runtime is also what produces the TypeScript type, so the shape has no second position in which to be stated and therefore no way to disagree with itself. The validation funnel rests entirely on this, and it is why `as const` is not optional — R19. |
+| `neverthrow` | The `Result` type | Insufficient funds and a foreign account are expected outcomes, not exceptions. Combined with the handler adapter, handling every `Result` becomes a property the compiler checks at the boundary. The companion lint plugin was evaluated and declined **on dependency health rather than on style**; R17 names the gap that leaves and sizes the custom rule that would close it. |
+| `bcryptjs` | Password hashing | Pure JavaScript, so a reviewer's install cannot fail on a node-gyp toolchain that is not there — which matters more under pnpm, where a native rebuild also has to clear the build-script gate. The cost is real and was measured rather than assumed: hashing is serialised on the event loop, which R10 puts at roughly twenty logins per second per process. |
+| `jose` | JWT signing and verification | No native dependencies, actively maintained, and it does the one thing asked of it. What it is *not* asked to do is the token lifecycle — no refresh, no revocation, no rotation — which is the deliberate gap recorded as R38. |
+
+### The toolchain, and the one version that is pinned
+
+**TypeScript is pinned to the 6 line (`~6.0`)** rather than tracking the latest release,
+and the pin is load-bearing twice over. typescript-eslint declares
+`typescript >=4.8.4 <6.1.0` and hard-aborts at startup on 7, which would take the whole
+type-aware lint ecosystem with it — including `no-floating-promises`, which this project
+delegates to it rather than to a review checklist. And the schema type inference above is
+sensitive to the compiler that produces it. R14 and R20 carry the two halves; the second
+is the more interesting one.
+
+The rest, briefly. **vitest** runs ESM TypeScript with supertest and Express 5 at zero
+configuration. **supertest** drives the app in process, so every test goes through the
+real HTTP stack without binding a port. **eslint** with **typescript-eslint** supplies the
+type-aware rules, alongside one custom rule in `eslint-rules/` that enforces the `Rz`
+naming convention. **pnpm** because its symlinked layout makes an undeclared transitive
+dependency fail rather than resolve silently through flat hoisting — R18 records what that
+costs a reviewer, and `pnpm-workspace.yaml` explains the one gate it puts in the way.
+
+Why there is a build step at all — Node executes TypeScript but does not rewrite import
+specifiers — is answered in § Running the service, where the command is.
+
+## Design decisions
+
+An index rather than a set of decision records, and that is a choice worth stating.
+Every decision below was taken during the build, at the point it was forced, and its
+reasoning was written down then — in the catalogue, in the slice notes, or beside the
+code. Restating any of it here would create a second copy free to drift from the first,
+which is the duplication this project avoids everywhere else. So the table says what was
+decided and where the argument lives, and the pointers are meant to be followed.
+
+| Decision | Where the reasoning lives |
+| --- | --- |
+| Money is integer pennies in an `INTEGER` column, never a decimal inside the service boundary | R9 carries the column choice and its £21.4m ceiling; `docs/divergences.md` § Slice 4/5, and the note below |
+| `toPennies` is the only decimal→integer conversion and the only 2dp validator, with the Ajv `currencyScale` keyword complementing rather than duplicating it | `docs/divergences.md` § Slice 1 for the conversion, § Slice 0b for the keyword; R11 records the two-places cost |
+| Validation is a single funnel: one schema object drives runtime validation and the compile-time type | `docs/divergences.md` § Slice 0b; R16, R19, R20 |
+| Response bodies are validated against their published schema, so a leaked hash is a 500 rather than a disclosure | `docs/divergences.md` § Slice 2; R35 |
+| Errors are values, with one renderer and two sources; the handler adapter makes every `Result` handled a compile-time property | `docs/divergences.md` § Slice 1; R13, R17 |
+| The withdrawal is a conditional `UPDATE` inside an explicit transaction, and answers 404 rather than 422 when the row has gone | `docs/divergences.md` § Slice 6/7; R1, R15, and the note below |
+| Ownership is resolved then authorised, in one shared function rather than a repeated pattern | `docs/divergences.md` § Slice 4/5; R7, R37 |
+| Timestamps are maintained by a database trigger, and the Kysely type makes an application write a compile error | `docs/divergences.md` § Slice 2; R37's table records what the type pins |
+| Account numbers are minted by insert-and-retry on `23505`, bounded, never check-then-insert | `docs/divergences.md` § Slice 4/5; R41 |
+| The JWT signing key is generated per process and never configured | R32, and § Authentication above |
+| The token has no lifecycle — the named gap in delivery scope | R38 |
+| Two specified list endpoints are not built | R34, and § Adding an endpoint above |
+| `PATCH` and `DELETE` are absent | R2, and R5 for what user deletion would need |
+| TypeScript is pinned one major behind | R14, R20 |
+| The connection pool is bounded at five rather than left at the driver default | R12, and the note below |
+| Specification defects are corrected in the document rather than worked around in code | `docs/spec-changes.md` in full |
+
+Three of those carry a detail that is worth having ready and does not live anywhere else,
+so it is written here rather than left implied.
+
+**`sum(integer)` returns a bigint, and therefore a string.** The column choice keeps
+balances as native numbers, but that guarantee stops at aggregation: Postgres widens the
+sum of an `INTEGER` column to `bigint` to avoid overflow, and node-postgres hands a
+`bigint` back as a string. No query here aggregates, so nothing is wrong today — but the
+first `SELECT sum(balance_pennies)` written against this schema will produce a string
+where the declaration promises a number, and it will typecheck.
+
+**The locking variant of the withdrawal was considered and not built.** `SELECT … FOR
+UPDATE` on the account row before the debit closes the window in which a concurrently
+deleted account turns a 404 into a 422. It is not built because that window needs a delete
+endpoint to be reachable at all and none is published — R1 states the residual, and the
+concurrency test in `src/http/transactions.test.ts` shows what the conditional `UPDATE`
+does guarantee without it.
+
+**The pool bound is five by measurement, not taste.** `pg` defaults to ten per pool and
+every test file builds its own, which asks Postgres for far more simultaneous backends
+than the suite can use. The concurrency test fires twenty withdrawals at a cold pool; under
+the default that intermittently fails with `could not fork new process`, and the request
+that could not get a connection answers 500 rather than the 422 the balance called for.
+The money was right in every run — the failure was the suite reporting something other
+than what it asserts.
 
 ## Troubleshooting
 
