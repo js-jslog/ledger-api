@@ -2,23 +2,52 @@
 
 ## Approach
 
+### The initial strategy
+
 I have taken an engineering leadership approach to delivering this solution with the goal of
 exercising the skills relevant to the Staff Engineer role. The focus has been on identifying goals,
 formalising a plan, mitigating & recording risks, surfacing blocking problems early, decision-making
 & course correction as the plan is executed, and delivering on the arranged day to the recruiting
 agent.
 
-I have chosen to write the code in TypeScript for two reasons:
+I have chosen TypeScript for two reasons:
 
 1. My own familiarity, which will result in more fluid demonstrations wherever code walkthroughs are
    required.
 2. The opportunity to demonstrate that I solve problems which Java is more prepared for than TS, not
    because they are easy, but because they are important. These decisions are more visible using TS.
 
-Note: I will add a reference section to identify what my principal areas of ownership are, and where
-they are on display in the codebase. This is a placeholder so that I can hand over this project as
-deliverable to the recruiting agent, on schedule, with just that reference section to be added later
-in preparation for an interview.
+### The method itself
+
+For the benefit of focused interrogation, if required. These are the key elements which I consider
+myself accountable for, including parts I did not design when the process that produced them was
+mine.
+
+My first decision was that the approach should combine the agility of iterative design with the
+reassurance of a material solution. A "probe" agent reported on deep issues which deserved proper
+anticipation in a final design, and a brief was built around that domain knowledge and the
+foundations I specified to keep the iterative solution focused, well architected and legible.
+
+Beyond the original brief, control over the project took two forms. Early phases involved high
+attention manual review, where no guardrails had been set yet and drift from the brief was likely.
+That review covered every slice up to and including the first endpoint: the toolchain, the
+validation funnel, the corrections to the supplied specification, the HTTP skeleton, the error
+envelope, and the first endpoint, `POST /v1/users` which was the basis for the rest. A handful of
+corrections were made which are named in R37 of the `docs/residual-risk-catalogue.md`:
+
+> that review is where a material share of this repository's corrections came from - a mis-stated
+> invariant, a mechanism that guarded less than its name implied, a test that asserted a route into
+> existence, an over-built design for a service that is never deployed.
+
+Once the foundations had been set, progress needed to accelerate to meet the deadline. Deep code
+reviews were replaced with a strategic orientation on a trimmed deliverable set, per-slice checkins
+with space for problems to be escalated for my review, extensibility as a stated goal with a
+walkthrough positioned early enough to be tested and corrected by endpoint implementations.
+
+This shift produced the Addenda sections in the `build-brief.md` and a record of accepted risk in
+R37 as well as further additions to `docs/divergences.md`. These, as much as the endpoints, are the
+deliverables of the project because they record that course correction occurred, whether under my
+own guidance or due to the mechanisms and goals that I had set.
 
 ## Functional deliverable
 
